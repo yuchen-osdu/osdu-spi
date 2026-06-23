@@ -51,6 +51,10 @@ inputs:
     description: 'kubectl rollout status timeout.'
     required: false
     default: '5m'
+  flux_namespace:
+    description: 'Namespace holding the spi-stack Flux Kustomizations, for the CI-mode suspend pre-check. Defaults to flux-system; THIS stack uses osdu-flux (the AKS Flux extension is configured there). Wire from an org variable so it tracks the cluster.'
+    required: false
+    default: 'flux-system'
 
 outputs:
   previous_digest:
@@ -100,13 +104,24 @@ runs:
       shell: bash
       # Fail fast if the cluster is not in CI mode: an unsuspended Kustomization reverts our
       # `kubectl set image` within its reconcile interval via Helm drift correction.
+      # NOTE: the suspend flag lives on the Kustomizations, not the GitRepository source --
+      # source-suspend (ADR-014) alone does NOT stop reconciliation from the cached artifact.
       run: |
-        running=$(kubectl get kustomizations -n flux-system -o json 2>/dev/null \
-          | jq -r '.items[] | select(.spec.suspend != true) | .metadata.name')
-        if [ -n "$running" ]; then
-          echo "::error::Flux Kustomizations not suspended: $running. Cluster is not in CI mode (see ADR-032 / §7.5). Run: flux suspend kustomization --all -n flux-system"
+        all=$(kubectl get kustomizations -n "$FLUX_NS" -o json 2>/dev/null | jq -r '.items[].metadata.name')
+        if [ -z "$all" ]; then
+          # A vacuous "0 unsuspended" would be a false negative. If the namespace has no
+          # Kustomizations, flux_namespace is almost certainly wrong (this stack uses osdu-flux).
+          echo "::error::No Flux Kustomizations found in namespace '$FLUX_NS' -- wrong flux_namespace? Refusing to deploy without verifying CI mode."
           exit 1
         fi
+        running=$(kubectl get kustomizations -n "$FLUX_NS" -o json \
+          | jq -r '.items[] | select(.spec.suspend != true) | .metadata.name')
+        if [ -n "$running" ]; then
+          echo "::error::Flux Kustomizations not suspended in $FLUX_NS: $running. Cluster is not in CI mode (see ADR-032 / §7.5). Run: flux suspend kustomization --all -n $FLUX_NS"
+          exit 1
+        fi
+      env:
+        FLUX_NS: ${{ inputs.flux_namespace }}
 
     - name: 'Capture previous digest (for restore)'
       id: capture-previous
