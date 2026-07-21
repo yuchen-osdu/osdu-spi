@@ -136,16 +136,11 @@ runs:
     - name: 'Capture previous digest (for restore)'
       id: capture-previous
       shell: bash
-      # Derive the pod selector from the live Deployment rather than assuming a label
-      # convention -- chart-prefixed names vary across services.
       run: |
-        SELECTOR=$(kubectl get deployment "$DEPLOYMENT_NAME" -n "$NS" \
-          -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' | sed 's/,$//')
-        # Only sample a Running, non-terminating pod whose target container is Ready, so a
-        # still-draining previous-RS pod (rolling update) can't yield a stale/foreign digest.
-        IMAGE_ID=$(kubectl get pods -n "$NS" -l "$SELECTOR" -o json \
-          | jq -r --arg c "$CONTAINER_NAME" '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | .status.containerStatuses[]? | select(.name==$c and .ready==true) | .imageID] | .[0] // ""')
-        DIGEST="${IMAGE_ID##*@}"
+        IMAGE=$(kubectl get deployment "$DEPLOYMENT_NAME" -n "$NS" -o json \
+          | jq -r --arg c "$CONTAINER_NAME" '.spec.template.spec.containers[] | select(.name==$c) | .image')
+        DIGEST="${IMAGE##*@}"
+        if [ "$DIGEST" = "$IMAGE" ]; then DIGEST=""; fi
         echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
         echo "Previous digest: ${DIGEST:-<none>}"
       env:
@@ -181,21 +176,20 @@ runs:
       run: |
         SELECTOR=$(kubectl get deployment "$DEPLOYMENT_NAME" -n "$NS" \
           -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' | sed 's/,$//')
-        # Only sample a Running, non-terminating pod whose target container is Ready, so a
-        # still-draining previous-RS pod (rolling update) can't yield a stale/foreign digest.
-        IMAGE_ID=$(kubectl get pods -n "$NS" -l "$SELECTOR" -o json \
-          | jq -r --arg c "$CONTAINER_NAME" '[.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | .status.containerStatuses[]? | select(.name==$c and .ready==true) | .imageID] | .[0] // ""')
-        DIGEST="${IMAGE_ID##*@}"
-        if [ -z "$DIGEST" ]; then
-          echo "::error::Could not read deployed digest for container '$CONTAINER_NAME' in deployment/$DEPLOYMENT_NAME."
+        DIGESTS=$(kubectl get pods -n "$NS" -l "$SELECTOR" -o json \
+          | jq -r --arg c "$CONTAINER_NAME" '.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | .status.containerStatuses[]? | select(.name==$c and .ready==true) | .imageID | split("@")[-1]' \
+          | sort -u)
+        if ! grep -Fxq "$EXPECTED" <<< "$DIGESTS"; then
+          echo "::error::No ready, non-terminating pod is running expected digest '$EXPECTED'. Observed: ${DIGESTS:-<none>}."
           exit 1
         fi
-        echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
-        echo "Deployed digest: ${DIGEST}"
+        echo "digest=${EXPECTED}" >> "$GITHUB_OUTPUT"
+        echo "Deployed digest: ${EXPECTED}"
       env:
         DEPLOYMENT_NAME: ${{ inputs.deployment_name }}
         CONTAINER_NAME: ${{ inputs.container_name }}
         NS: ${{ inputs.namespace }}
+        EXPECTED: ${{ inputs.image_digest }}
 
     - name: 'Collect diagnostics on failure'
       if: failure()

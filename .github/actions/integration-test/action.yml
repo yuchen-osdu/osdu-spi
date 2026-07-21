@@ -163,11 +163,11 @@ runs:
         fi
         SELECTOR=$(kubectl get deployment "$DEPLOYMENT" -n "$NS" \
           -o go-template='{{range $k,$v := .spec.selector.matchLabels}}{{$k}}={{$v}},{{end}}' | sed 's/,$//')
-        CURRENT=$(kubectl get pods -n "$NS" -l "$SELECTOR" -o json \
-          | jq -r --arg c "$CONTAINER" '[.items[].status.containerStatuses[]? | select(.name==$c) | .imageID] | .[0] // ""')
-        CURRENT_DIGEST="${CURRENT##*@}"
-        if [ "$CURRENT_DIGEST" != "$EXPECTED" ]; then
-          echo "::error::Pod is running '${CURRENT_DIGEST:-<none>}' but deploy set '$EXPECTED'. Possible Flux resume, pod restart with stale image, or cross-service overwrite."
+        CURRENT_DIGESTS=$(kubectl get pods -n "$NS" -l "$SELECTOR" -o json \
+          | jq -r --arg c "$CONTAINER" '.items[] | select(.metadata.deletionTimestamp == null and .status.phase == "Running") | .status.containerStatuses[]? | select(.name==$c and .ready==true) | .imageID | split("@")[-1]' \
+          | sort -u)
+        if ! grep -Fxq "$EXPECTED" <<< "$CURRENT_DIGESTS"; then
+          echo "::error::No ready, non-terminating pod is running '$EXPECTED'. Observed: ${CURRENT_DIGESTS:-<none>}. Possible Flux resume, pod restart with a stale image, or cross-service overwrite."
           exit 1
         fi
         echo "Verified pod is running the expected digest: $EXPECTED"
