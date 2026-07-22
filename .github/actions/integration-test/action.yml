@@ -475,7 +475,7 @@ runs:
             echo ""
             echo "> ⚠️ ${PARSE_ERRORS} JUnit XML report(s) could not be parsed."
           fi
-        } >> "$GITHUB_STEP_SUMMARY"
+        } | tee -a "$GITHUB_STEP_SUMMARY"
         # Re-surface the real test outcome as this action's exit code.
         [ "$TESTS_OUTCOME" = "success" ]
       env:
