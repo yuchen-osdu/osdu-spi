@@ -153,10 +153,14 @@ class WorkflowContractTests(unittest.TestCase):
         workflow = (
             ROOT / ".github" / "template-workflows" / "build.yml"
         ).read_text(encoding="utf-8")
+        dependabot_workflow = (
+            ROOT / ".github" / "template-workflows" / "dependabot-validation.yml"
+        ).read_text(encoding="utf-8")
 
         profile_expression = "${{ vars.MAVEN_PROFILE || 'core,azure' }}"
         self.assertIn(f"maven_profile: {profile_expression}", workflow)
         self.assertIn(f"MAVEN_PROFILE: {profile_expression}", workflow)
+        self.assertIn(f"maven_profile: {profile_expression}", dependabot_workflow)
         self.assertIn(
             'MAVEN_CLI_OPTS="$MAVEN_CLI_OPTS -P $MAVEN_PROFILE"',
             workflow,
