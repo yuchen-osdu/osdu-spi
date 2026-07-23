@@ -166,6 +166,14 @@ class WorkflowContractTests(unittest.TestCase):
             workflow,
         )
 
+    def test_template_ci_runs_for_any_template_repository(self):
+        workflow = (ROOT / ".github" / "workflows" / "dev-ci.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("if: github.event.repository.is_template == true", workflow)
+        self.assertNotIn("github.repository == 'azure/osdu-spi'", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
