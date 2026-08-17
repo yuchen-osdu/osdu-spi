@@ -20,11 +20,16 @@
 #   - template-workflows directory removal
 #   - Template files per sync-config.json cleanup rules
 #
+# Post-cleanup seeding:
+#   - fork-owned CODEOWNERS rule for /.spi/ (ADR-039)
+#
 # Arguments:
 #   None
 #
 # Environment Variables:
-#   None required (runs in git repository context)
+#   SPI_ENGINEERING_OWNERS  Optional. GitHub team/user that must review `.spi/**`
+#                           (for example "@my-org/engineering-system"). When unset or
+#                           invalid a documented, commented placeholder is written.
 #
 # Usage:
 #   ./deploy-fork-resources.sh
@@ -142,5 +147,18 @@ for workflow in $CLEANUP_WORKFLOWS; do
     rm -f "$workflow"
   fi
 done
+
+# Seed the fork-owned CODEOWNERS ownership rule for the service descriptor (ADR-039).
+# The template CODEOWNERS was just removed by the cleanup rules above; the fork needs its
+# own file so the ruleset's require_code_owner_review can protect `/.spi/`. The owning team
+# differs per organization, so it comes from the SPI_ENGINEERING_OWNERS repository variable;
+# without it a documented, commented placeholder is written instead of an invalid team.
+if [[ -f ".github/scripts/service-config/generate_codeowners.py" ]]; then
+  echo "Seeding CODEOWNERS ownership for /.spi/..."
+  python3 .github/scripts/service-config/generate_codeowners.py \
+    --path CODEOWNERS \
+    --owners "${SPI_ENGINEERING_OWNERS:-}"
+  git add CODEOWNERS
+fi
 
 echo "✅ Fork resources deployed and template files cleaned up"

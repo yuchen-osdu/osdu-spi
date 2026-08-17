@@ -117,6 +117,7 @@ nav:
       - Overview: architecture/overview.md
       - Three-Branch Strategy: architecture/three_branch_strategy.md
       - Workflow System: architecture/workflow_system.md
+      - Service Descriptor: architecture/service_descriptor.md
       - AI Integration: architecture/ai_integration.md
   - Workflows:
       - Initialization: workflows/initialization.md

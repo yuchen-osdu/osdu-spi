@@ -50,6 +50,62 @@ permissions:
   pull-requests: write
 
 jobs:
+  read-service-config:
+    # ADR-039 prelude: same fixed output contract as validate.yml. Feature-branch pushes are
+    # already trusted-by-branch, so the descriptor is read from the pushed tree.
+    name: "🧭 Read Service Config"
+    runs-on: ubuntu-latest
+    outputs:
+      descriptor_present: ${{ steps.config.outputs.descriptor_present }}
+      schema_version: ${{ steps.config.outputs.schema_version }}
+      archetype: ${{ steps.config.outputs.archetype }}
+      service_name: ${{ steps.config.outputs.service_name }}
+      dockerfile_profile: ${{ steps.config.outputs.dockerfile_profile }}
+      unit_test_type: ${{ steps.config.outputs.unit_test_type }}
+      has_coverage: ${{ steps.config.outputs.has_coverage }}
+      # Language-neutral selection output consumed by the build lanes below.
+      build_lane: ${{ steps.config.outputs.build_lane }}
+      lane_implemented: ${{ steps.config.outputs.lane_implemented }}
+      fallback: ${{ steps.config.outputs.fallback }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+
+      - name: "Resolve Service Configuration"
+        id: config
+        env:
+          SERVICE_NAME: ${{ vars.SERVICE_NAME || github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          READER=".github/scripts/service-config/read_service_config.py"
+          if [ ! -f "$READER" ]; then
+            # Fork predating ADR-039 (template-sync not yet applied): preserve current behaviour.
+            echo "::warning::$READER not found; using legacy Java inference"
+            if [ -f "pom.xml" ] || [ -n "$(find . -name 'pom.xml' -type f)" ]; then
+              LANE=java
+            else
+              LANE=none
+            fi
+            {
+              echo "descriptor_present=false"
+              echo "schema_version="
+              echo "archetype="
+              echo "service_name=${SERVICE_NAME}"
+              echo "dockerfile_profile=$([ "$LANE" = "java" ] && echo java || echo '')"
+              echo "unit_test_type=$([ "$LANE" = "java" ] && echo maven || echo '')"
+              echo "has_coverage=$([ "$LANE" = "java" ] && echo true || echo false)"
+              echo "build_lane=${LANE}"
+              echo "lane_implemented=$([ "$LANE" = "java" ] && echo true || echo false)"
+              echo "fallback=$([ "$LANE" = "java" ] && echo java-inference || echo none)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 "$READER" \
+            --root . \
+            --service-name "${SERVICE_NAME}" \
+            --format github \
+            --output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
   check-repo-state:
     name: "🔍 Check Repository State"
     runs-on: ubuntu-latest
@@ -77,10 +133,19 @@ jobs:
             echo "is_java=false" >> $GITHUB_OUTPUT
           fi
 
+  # ──────────────────────────────────────────────────────────────────────────────
+  # INTEGRATION POINT (issue #42, parent task): add the statically declared
+  # `python-build` job here, gated on
+  # `needs.read-service-config.outputs.build_lane == 'python'`. This template
+  # version ships no python-build action, so a python descriptor intentionally
+  # produces no feature-branch build (validate.yml fails the required check closed).
+  # ──────────────────────────────────────────────────────────────────────────────
+
   java-build:
     name: "🔨 Java Build"
-    needs: check-repo-state
-    if: needs.check-repo-state.outputs.initialized == 'true' && needs.check-repo-state.outputs.is_java_project == 'true'
+    needs: [check-repo-state, read-service-config]
+    # Lane selection is descriptor-driven (ADR-039); absent descriptor keeps Java inference.
+    if: needs.check-repo-state.outputs.initialized == 'true' && needs.read-service-config.outputs.build_lane == 'java'
     runs-on: ubuntu-latest
     outputs:
       is_java_project: ${{ steps.build.outputs.is_java_project }}
@@ -99,8 +164,8 @@ jobs:
 
   code-coverage:
     name: "📊 Code Coverage"
-    needs: [check-repo-state, java-build]
-    if: needs.check-repo-state.outputs.is_java_project == 'true'
+    needs: [check-repo-state, read-service-config, java-build]
+    if: needs.read-service-config.outputs.build_lane == 'java' && needs.read-service-config.outputs.has_coverage == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5

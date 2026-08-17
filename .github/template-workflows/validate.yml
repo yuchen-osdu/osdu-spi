@@ -167,6 +167,88 @@ jobs:
             echo "is_java=false" >> $GITHUB_OUTPUT
           fi
 
+  read-service-config:
+    # ADR-039 prelude: resolve the fork-owned `.spi/service.yaml` into a small, fixed
+    # output contract. The descriptor never yields shell, secrets or deploy targets —
+    # only closed enums, names and paths. Absent descriptor keeps the legacy Java
+    # inference (`fallback=java-inference`), so existing forks are unaffected.
+    name: "🧭 Read Service Config"
+    needs: check-initialization
+    if: needs.check-initialization.outputs.initialized == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      descriptor_present: ${{ steps.config.outputs.descriptor_present }}
+      schema_version: ${{ steps.config.outputs.schema_version }}
+      archetype: ${{ steps.config.outputs.archetype }}
+      service_name: ${{ steps.config.outputs.service_name }}
+      dockerfile_profile: ${{ steps.config.outputs.dockerfile_profile }}
+      unit_test_type: ${{ steps.config.outputs.unit_test_type }}
+      has_coverage: ${{ steps.config.outputs.has_coverage }}
+      # Language-neutral selection output consumed by the build lanes below.
+      build_lane: ${{ steps.config.outputs.build_lane }}
+      lane_implemented: ${{ steps.config.outputs.lane_implemented }}
+      fallback: ${{ steps.config.outputs.fallback }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
+        with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: "Restore trusted service config for sync/pull_request_target"
+        if: github.event_name == 'pull_request_target'
+        run: |
+          set -euo pipefail
+          # §6.4 trust boundary (ADR-039): pull_request_target runs with repository context, so the
+          # descriptor and its parser must come from trusted main, never from the PR head. This
+          # mirrors the existing "restore trusted actions/build" pattern. A main branch without a
+          # descriptor legitimately restores nothing and falls back to Java inference.
+          echo "🔧 Restoring trusted service config from origin/main..."
+          if ! git fetch origin main --depth=1; then
+            echo "❌ Failed to fetch 'main' branch from origin. Cannot resolve a trusted descriptor."
+            exit 1
+          fi
+          rm -rf .spi .github/scripts/service-config
+          git checkout origin/main -- .github/scripts/service-config/ || \
+            echo "ℹ️ Template has no service-config scripts on main yet"
+          git checkout origin/main -- .spi/ || \
+            echo "ℹ️ No trusted descriptor on main — legacy Java inference applies"
+
+      - name: "Resolve Service Configuration"
+        id: config
+        env:
+          SERVICE_NAME: ${{ vars.SERVICE_NAME || github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          READER=".github/scripts/service-config/read_service_config.py"
+          if [ ! -f "$READER" ]; then
+            # Fork predating ADR-039 (template-sync not yet applied): preserve current behaviour.
+            echo "::warning::$READER not found; using legacy Java inference"
+            if [ -f "pom.xml" ] || [ -n "$(find . -name 'pom.xml' -type f)" ]; then
+              LANE=java
+            else
+              LANE=none
+            fi
+            {
+              echo "descriptor_present=false"
+              echo "schema_version="
+              echo "archetype="
+              echo "service_name=${SERVICE_NAME}"
+              echo "dockerfile_profile=$([ "$LANE" = "java" ] && echo java || echo '')"
+              echo "unit_test_type=$([ "$LANE" = "java" ] && echo maven || echo '')"
+              echo "has_coverage=$([ "$LANE" = "java" ] && echo true || echo false)"
+              echo "build_lane=${LANE}"
+              echo "lane_implemented=$([ "$LANE" = "java" ] && echo true || echo false)"
+              echo "fallback=$([ "$LANE" = "java" ] && echo java-inference || echo none)"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python3 "$READER" \
+            --root . \
+            --service-name "${SERVICE_NAME}" \
+            --format github \
+            --output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+
   check-paths:
     name: "🔍 Check for Build-Relevant Changes"
     needs: check-initialization
@@ -201,12 +283,15 @@ jobs:
             exit 0
           fi
 
-          # Config-only ignore set (mirrors codeql.yml). .mvn/ is special-cased as build-relevant:
-          # the build copies .mvn/community-maven.settings.xml into Maven settings, so it can affect it.
+          # Config-only ignore set (mirrors codeql.yml). .mvn/ and .spi/ are special-cased as
+          # build-relevant: the build copies .mvn/community-maven.settings.xml into Maven settings,
+          # and .spi/service.yaml selects the build archetype itself (ADR-039). Both start with a
+          # dot and would otherwise be swallowed by the generic dotfile exclusion below.
           SHOULD_RUN=false
           while IFS= read -r file; do
             # .mvn/ affects the Maven build (settings/mirror config); never config-only.
-            case "$file" in .mvn/*) SHOULD_RUN=true; break ;; esac
+            # .spi/ is the service descriptor; a descriptor-only PR must run the full build lane.
+            case "$file" in .mvn/*|.spi/*) SHOULD_RUN=true; break ;; esac
             if echo "$file" | grep -qE '^(\.github/|devops/|docs/|\..*|.*\.md)$'; then
               continue
             fi
@@ -223,12 +308,14 @@ jobs:
 
   java-build:
     name: "🔨 Java Build"
-    needs: [check-initialization, check-repo-state, check-paths]
+    needs: [check-initialization, check-repo-state, check-paths, read-service-config]
     # Skip java-build for Dependabot PRs (handled by dependabot-validation.yml)
     # and for docs/config-only PRs (check-paths.should_run == 'false').
+    # Lane selection is descriptor-driven (ADR-039): `build_lane` is 'java' for the
+    # java-maven-azure archetype and for descriptor-less forks with Maven markers.
     if: |
       needs.check-repo-state.outputs.is_initialized == 'true' &&
-      needs.check-repo-state.outputs.is_java_repo == 'true' &&
+      needs.read-service-config.outputs.build_lane == 'java' &&
       needs.check-paths.outputs.should_run == 'true' &&
       github.actor != 'dependabot[bot]'
     runs-on: ubuntu-latest
@@ -407,7 +494,7 @@ jobs:
 
   code-validation:
     name: "✅ Code Quality Checks"
-    needs: [check-initialization, check-repo-state, check-paths, java-build]
+    needs: [check-initialization, check-repo-state, check-paths, read-service-config, java-build]
     if: |
       always() &&
       needs.check-initialization.outputs.initialized == 'true'
@@ -527,7 +614,13 @@ jobs:
             ITEMS=$(echo "$ITEMS" | jq '. + ["ℹ️ Dependabot Build Handled by dependabot-validation.yml"]')
           # For all other PRs (including sync PRs), report build status
           elif [[ "${{ needs.check-repo-state.outputs.is_initialized }}" == "true" ]]; then
-            if [[ "${{ needs.check-repo-state.outputs.is_java_repo }}" == "true" ]]; then
+            # Descriptor-driven lane reporting (ADR-039); no descriptor keeps the Java wording.
+            if [[ "${{ needs.read-service-config.outputs.descriptor_present }}" == "true" ]]; then
+              ITEMS=$(echo "$ITEMS" | jq --arg a "${{ needs.read-service-config.outputs.archetype }}" '. + ["✓ Service Descriptor: \($a)"]')
+            fi
+            if [[ "${{ needs.read-service-config.result }}" != "success" ]]; then
+              ITEMS=$(echo "$ITEMS" | jq '. + ["❌ Service Descriptor Invalid or Unreadable"]')
+            elif [[ "${{ needs.read-service-config.outputs.build_lane }}" == "java" ]]; then
               if [[ "${{ needs.java-build.result }}" == "success" ]]; then
                 ITEMS=$(echo "$ITEMS" | jq '. + ["✓ Java Build Successful"]')
               elif [[ "${{ needs.java-build.result }}" == "skipped" && "${{ needs.check-paths.outputs.should_run }}" == "false" ]]; then
@@ -537,8 +630,10 @@ jobs:
               else
                 ITEMS=$(echo "$ITEMS" | jq '. + ["❌ Java Build Failed"]')
               fi
-            else
+            elif [[ "${{ needs.read-service-config.outputs.build_lane }}" == "none" ]]; then
               ITEMS=$(echo "$ITEMS" | jq '. + ["ℹ️ Non-Java Repository"]')
+            else
+              ITEMS=$(echo "$ITEMS" | jq --arg a "${{ needs.read-service-config.outputs.archetype }}" '. + ["❌ Archetype \($a) Has No Build Lane In This Template Version"]')
             fi
           else
             ITEMS=$(echo "$ITEMS" | jq '. + ["ℹ️ Repository Not Yet Initialized"]')
@@ -555,13 +650,29 @@ jobs:
           pr_number: ${{ github.event.pull_request.number }}
           status_items: ${{ steps.status.outputs.items }}
 
+  # ──────────────────────────────────────────────────────────────────────────────
+  # INTEGRATION POINT (issue #42, parent task): the python build lane belongs here.
+  # Add a statically declared job — expressions are not allowed in `jobs.<id>.uses`
+  # or step-level `uses:` — gated on the language-neutral selection output:
+  #
+  #   python-build:
+  #     name: "🐍 Python Build"
+  #     needs: [check-initialization, check-repo-state, check-paths, read-service-config]
+  #     if: needs.read-service-config.outputs.build_lane == 'python' && ...
+  #     uses: ./.github/actions/python-build   # not present in this template version
+  #
+  # then add `python-build` to docker-build-required's needs and flip
+  # `laneImplemented` for python-uv-fastapi in .github/scripts/service-config/schema.json.
+  # Until then a python descriptor fails the required check closed (never a green skip).
+  # ──────────────────────────────────────────────────────────────────────────────
+
   docker-build-required:
     # Required branch-protection check "🐳 Docker Build" (ADR-030 summary-job pattern, mirrors the
     # CodeQL summary job). Consolidates the validate-only build into one always-reporting context so
     # the required check never wedges (config-only/non-Java/dependabot/uninitialized all pass) and a
     # real build failure blocks. Suppressed on pull_request_target so the dual trigger reports it once.
     name: "🐳 Docker Build"
-    needs: [check-initialization, check-repo-state, check-paths, java-build, docker-build]
+    needs: [check-initialization, check-repo-state, check-paths, read-service-config, java-build, docker-build]
     if: always() && github.event_name != 'pull_request_target'
     runs-on: ubuntu-latest
     steps:
@@ -576,6 +687,10 @@ jobs:
              [ "${{ needs.check-paths.result }}" = "failure" ] || [ "${{ needs.check-paths.result }}" = "cancelled" ]; then
             echo "❌ A validation prerequisite job failed or was cancelled"; exit 1
           fi
+          # An invalid/unreadable service descriptor fails closed (ADR-039): never a green skip.
+          if [ "${{ needs.read-service-config.result }}" = "failure" ] || [ "${{ needs.read-service-config.result }}" = "cancelled" ]; then
+            echo "❌ Service descriptor (.spi/service.yaml) is invalid or could not be read"; exit 1
+          fi
           if [ "${{ needs.check-initialization.outputs.initialized }}" != "true" ]; then
             echo "✅ Docker Build skipped - repository not yet initialized"; exit 0
           fi
@@ -585,8 +700,16 @@ jobs:
           if [ "${{ github.actor }}" = "dependabot[bot]" ]; then
             echo "✅ Docker Build skipped - Dependabot build handled by dependabot-validation.yml"; exit 0
           fi
-          if [ "${{ needs.check-repo-state.outputs.is_java_repo }}" != "true" ]; then
-            echo "✅ Docker Build skipped - non-Java repository"; exit 0
+          # A declared archetype whose build lane is not installed in this template version must
+          # fail closed — a present descriptor may never produce a green skip (ADR-039 §6.3).
+          if [ "${{ needs.read-service-config.outputs.descriptor_present }}" = "true" ] && \
+             [ "${{ needs.read-service-config.outputs.lane_implemented }}" != "true" ]; then
+            echo "❌ Archetype '${{ needs.read-service-config.outputs.archetype }}' has no build lane in this template version"
+            echo "   Update the template (template-sync) before declaring this archetype."
+            exit 1
+          fi
+          if [ "${{ needs.read-service-config.outputs.build_lane }}" = "none" ]; then
+            echo "✅ Docker Build skipped - no build lane selected (non-Java repository, no descriptor)"; exit 0
           fi
           if [ "${{ needs.java-build.result }}" = "failure" ] || [ "${{ needs.java-build.result }}" = "cancelled" ]; then
             echo "❌ Java build failed or was cancelled"; exit 1

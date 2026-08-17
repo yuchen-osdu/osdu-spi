@@ -16,6 +16,15 @@ The validation workflow activates automatically across multiple scenarios to mai
 
 The workflow performs comprehensive validation across three key areas to ensure both code quality and process compliance:
 
+### Service Configuration Resolution
+Before any build work starts, a `read-service-config` prelude resolves the fork-owned
+[`.spi/service.yaml`](../architecture/service_descriptor.md) descriptor and publishes a small set
+of outputs (archetype, build lane, Dockerfile profile, test type, coverage flag). The build lane
+selects the language job; a repository without a descriptor keeps the previous Java inference and
+logs a warning. An invalid descriptor, or one declaring an archetype whose lane is not installed in
+this template version, fails the required `🐳 Docker Build` check closed. Changes under `.spi/**`
+are always treated as build-relevant, so a descriptor-only pull request runs the full lane.
+
 ### Code Quality Validation
 The system verifies that your code is functional and maintainable by running build verification to ensure code compiles and all dependencies resolve correctly, executing the full test suite and generating coverage reports, and performing lint checks to enforce consistent code style and formatting standards.
 

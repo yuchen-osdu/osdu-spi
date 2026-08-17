@@ -29,7 +29,11 @@ The workflow produces clear outcomes to help you understand the state of your ch
 ## Build Support
 
 ### Supported Project Types
-- **Java/Maven only** - Detects Maven-based projects with `pom.xml` files
+- **Descriptor-driven archetypes** - `.spi/service.yaml` declares the build archetype
+  ([service descriptor](../architecture/service_descriptor.md)); `java-maven-azure` is the
+  implemented lane, `python-uv-fastapi` is reserved and not yet installed
+- **Java/Maven** - Selected by the descriptor, or inferred from `pom.xml` when a fork has no
+  descriptor yet
 - **Java 17 runtime** - Uses Temurin distribution for consistent builds
 - **Community Maven repositories** - Supports GitLab-hosted OSDU dependencies
 
