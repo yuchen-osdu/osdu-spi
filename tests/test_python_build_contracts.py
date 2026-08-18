@@ -216,6 +216,35 @@ class ActionContractTests(unittest.TestCase):
         self.assertEqual("in-process,subprocess", inputs["service_test_modes"]["default"])
         self.assertEqual("", inputs["lock_regeneration_script"]["default"])
 
+    @unittest.skipUnless(HAS_YAML, "PyYAML is not available")
+    def test_the_caller_owns_the_checkout(self):
+        """java-build has no internal checkout; the Python lane must match it.
+
+        A composite action that checks out itself would silently re-fetch the default
+        ref and undo a caller's trusted `pull_request_target` restore.
+        """
+
+        import yaml
+
+        for step in yaml.safe_load(self.action)["runs"]["steps"]:
+            self.assertNotIn("actions/checkout", str(step.get("uses", "")))
+        self.assertIn("The caller owns the checkout", self.action)
+
+    @unittest.skipUnless(HAS_YAML, "PyYAML is not available")
+    def test_uv_version_default_is_pinned_to_the_canonical_image(self):
+        """CI must resolve the lockfile with the uv the image installs it with."""
+
+        import yaml
+
+        default = yaml.safe_load(self.action)["inputs"]["uv_version"]["default"]
+        image = re.search(
+            r"ghcr\.io/astral-sh/uv:(\d+\.\d+\.\d+)@sha256:[0-9a-f]{64}", _read(DOCKERFILE)
+        )
+
+        self.assertIsNotNone(image, "the canonical image must pin uv by version and digest")
+        self.assertEqual(image.group(1), str(default))
+        self.assertNotIn(default, ("", "latest", "latest-known"))
+
 
 class DockerfileContractTests(unittest.TestCase):
     def setUp(self):
@@ -539,6 +568,15 @@ class DocumentationTests(unittest.TestCase):
         self.assertIn("--secret id=netrc", doc)
         self.assertIn("PIP_INDEX_URL", doc)
         self.assertIn("3.13", doc)
+
+    def test_caller_contract_and_workflow_wiring_are_documented(self):
+        doc = _read(ROOT / "doc" / "src" / "workflows" / "python-build.md")
+
+        self.assertIn("caller owns the checkout", doc)
+        self.assertIn("fetch-depth: 0", doc)
+        self.assertIn("build_lane == 'python'", doc)
+        self.assertIn("container.appModule", doc)
+        self.assertIn("source", doc)
 
     def test_build_documentation_links_the_python_profile(self):
         build_doc = _read(ROOT / "doc" / "src" / "workflows" / "build.md")

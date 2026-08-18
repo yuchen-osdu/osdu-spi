@@ -55,6 +55,11 @@ def _render_summary(config: descriptor_module.ResolvedConfig, redact: bool) -> s
     lines.append(f"- Build lane: `{config.build_lane}`")
     if config.archetype:
         lines.append(f"- Archetype: `{config.archetype}`")
+    if config.build_lane == "python":
+        lines.append(f"- Python runtime: `{config.python_runtime_version or 'default'}`")
+        lines.append(f"- Application module: `{config.app_module or 'not declared'}`")
+        if config.python_runtime_extras:
+            lines.append(f"- Runtime extras: `{config.python_runtime_extras}`")
     if config.fallback != "none":
         lines.append(f"- Fallback: `{config.fallback}`")
     for warning in config.warnings:
@@ -77,6 +82,16 @@ def main(argv=None) -> int:
         print(json.dumps(config.to_json_dict(redact=args.redact), indent=2, sort_keys=True))
     else:
         outputs = config.outputs()
+        # $GITHUB_OUTPUT is line-based: a value carrying a newline would define extra
+        # outputs. The parser and schema already make this impossible, so treat it as a
+        # tamper signal and fail closed rather than writing the file.
+        for key, value in outputs.items():
+            if "\n" in value or "\r" in value:
+                sys.stderr.write(
+                    f"::error::Refusing to publish multi-line output '{key}' from "
+                    f"{descriptor_module.DESCRIPTOR_PATH}\n"
+                )
+                return 1
         rendered = "".join(f"{key}={value}\n" for key, value in outputs.items())
         if args.output:
             with open(args.output, "a", encoding="utf-8") as stream:

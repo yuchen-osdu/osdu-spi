@@ -97,7 +97,7 @@ jobs:
               echo "❌ $script has syntax errors"
               validation_failed=true
             fi
-          done < <(find .github/scripts .github/local-actions .github/actions -name '*.sh' -type f)
+          done < <(find .github/scripts .github/local-actions .github/actions build -name '*.sh' -type f)
           if [ "$validation_failed" = "true" ]; then
             echo "❌ Shell validation failed"
             exit 1
@@ -145,6 +145,12 @@ jobs:
             ".github/scripts/service-config/read_service_config.py"
             ".github/scripts/service-config/generate_descriptor.py"
             ".github/scripts/service-config/generate_codeowners.py"
+            ".github/actions/java-build/action.yml"
+            ".github/actions/python-build/action.yml"
+            ".github/actions/docker-build/action.yml"
+            ".github/actions/docker-build/prepare-build-args.sh"
+            "build/Dockerfile"
+            "build/python/Dockerfile"
           )
           
           for file in "${required_files[@]}"; do

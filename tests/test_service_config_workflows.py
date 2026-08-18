@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -23,6 +27,7 @@ SETTINGS_APPLY = ROOT / ".github" / "template-workflows" / "settings-apply.yml"
 INIT_COMPLETE = ROOT / ".github" / "workflows" / "init-complete.yml"
 DEV_CI = ROOT / ".github" / "workflows" / "dev-ci.yml"
 SYNC_CONFIG = ROOT / ".github" / "sync-config.json"
+SCHEMA = ROOT / ".github" / "scripts" / "service-config" / "schema.json"
 CHECK_VARIABLES = ROOT / ".github" / "scripts" / "settings-apply" / "check-required-variables.sh"
 DEPLOY_FORK_RESOURCES = (
     ROOT / ".github" / "local-actions" / "init-helpers" / "deploy-fork-resources.sh"
@@ -33,6 +38,66 @@ REQUIRED_CHECK_CONTEXT = 'name: "🐳 Docker Build"'
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _posix_path(path: Path) -> str:
+    """Return a path the local bash can open (handles WSL bash on Windows)."""
+
+    text = str(path)
+    if os.name == "nt" and len(text) > 2 and text[1] == ":":
+        return "/mnt/" + text[0].lower() + text[2:].replace("\\", "/")
+    return text
+
+
+def _bash_available() -> bool:
+    if shutil.which("bash") is None:
+        return False
+    try:
+        probe = subprocess.run(["bash", "-c", "exit 0"], capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return probe.returncode == 0
+
+
+BASH_READY = _bash_available()
+
+
+def _job_block(workflow_text: str, job_id: str) -> str:
+    """Return the YAML block of one job, so assertions cannot leak across jobs."""
+
+    lines = workflow_text.splitlines()
+    start = None
+    for index, line in enumerate(lines):
+        if line.startswith(f"  {job_id}:"):
+            start = index
+            break
+    if start is None:
+        raise AssertionError(f"job '{job_id}' not found")
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("  ") and not line.startswith("   ") and line.strip().endswith(":"):
+            return "\n".join(lines[start:index])
+    return "\n".join(lines[start:])
+
+
+def _step_script(workflow: Path, job_id: str, step_name: str) -> str:
+    """Extract a step's `run:` body verbatim so it can be executed for real."""
+
+    block = _job_block(_read(workflow), job_id)
+    marker = f'- name: "{step_name}"'
+    if marker not in block:
+        raise AssertionError(f"step '{step_name}' not found in job '{job_id}'")
+    after = block.split(marker, 1)[1]
+    body = after.split("run: |", 1)[1]
+    collected: list[str] = []
+    for line in body.splitlines()[1:]:
+        if line.strip() and not line.startswith(" " * 10):
+            break
+        collected.append(line[10:] if len(line) > 10 else "")
+    script = "\n".join(collected)
+    if "${{" in script:
+        raise AssertionError(f"step '{step_name}' interpolates an expression; cannot execute it")
+    return script + "\n"
 
 
 def _build_relevant(workflow_text: str, changed_file: str) -> bool:
@@ -146,19 +211,232 @@ class ServiceConfigPreludeTests(unittest.TestCase):
         self.assertIn("git checkout origin/main -- .spi/", restore)
         self.assertIn("git checkout origin/main -- .github/scripts/service-config/", restore)
 
-    def test_python_build_action_is_not_referenced_yet(self):
-        self.assertFalse((ROOT / ".github" / "actions" / "python-build").exists())
+    def test_python_build_action_is_wired_into_both_workflows(self):
+        self.assertTrue((ROOT / ".github" / "actions" / "python-build").exists())
 
         for workflow in (VALIDATE, BUILD):
             with self.subTest(workflow=workflow.name):
-                for line in _read(workflow).splitlines():
-                    if "python-build" in line:
-                        self.assertTrue(line.strip().startswith("#"), line)
+                text = _read(workflow)
+                self.assertIn("  python-build:", text)
+                self.assertIn('name: "🐍 Python Build"', text)
+                self.assertIn("uses: ./.github/actions/python-build", text)
+                self.assertIn("needs.read-service-config.outputs.build_lane == 'python'", text)
 
-    def test_integration_point_for_the_python_lane_is_documented(self):
+    def test_python_lane_is_parameterised_by_descriptor_outputs(self):
         for workflow in (VALIDATE, BUILD):
             with self.subTest(workflow=workflow.name):
-                self.assertIn("INTEGRATION POINT", _read(workflow))
+                job = _job_block(_read(workflow), "python-build")
+                # Safe default keeps a minimal descriptor (no runtimeVersion) working.
+                self.assertIn(
+                    "python_version: ${{ needs.read-service-config.outputs.python_runtime_version || '3.12' }}",
+                    job,
+                )
+                self.assertIn(
+                    "package_name: ${{ needs.read-service-config.outputs.python_import_package }}", job
+                )
+                self.assertIn(
+                    "test_extras: ${{ needs.read-service-config.outputs.python_test_extras }}", job
+                )
+                self.assertIn(
+                    "runtime_extras: ${{ needs.read-service-config.outputs.python_runtime_extras }}", job
+                )
+                # The action no longer checks out; the caller must, with full history.
+                self.assertIn("fetch-depth: 0", job)
+                self.assertIn("uses: actions/checkout@", job)
+
+    def test_python_lane_restores_trusted_actions_for_sync_pull_requests(self):
+        job = _job_block(_read(VALIDATE), "python-build")
+
+        self.assertIn("Restore local actions for sync PRs", job)
+        self.assertIn("git checkout origin/main -- .github/actions/", job)
+        self.assertIn(
+            "ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || github.sha }}",
+            job,
+        )
+
+    def test_python_reports_are_published_by_the_action_not_the_workflow(self):
+        action = _read(ROOT / ".github" / "actions" / "python-build" / "action.yml")
+
+        for artifact in ("python-junit-reports", "python-coverage-reports", "build-artifacts"):
+            self.assertIn(f"name: {artifact}", action)
+        for workflow in (VALIDATE, BUILD):
+            with self.subTest(workflow=workflow.name):
+                job = _job_block(_read(workflow), "python-build")
+                self.assertNotIn("upload-artifact", job)
+
+    def test_no_obsolete_python_integration_point_remains(self):
+        for workflow in (VALIDATE, BUILD):
+            with self.subTest(workflow=workflow.name):
+                self.assertNotIn("INTEGRATION POINT", _read(workflow))
+
+    def test_python_archetype_lane_is_marked_implemented(self):
+        schema = json.loads(_read(SCHEMA))
+
+        self.assertTrue(schema["archetypes"]["python-uv-fastapi"]["laneImplemented"])
+        self.assertTrue(schema["archetypes"]["java-maven-azure"]["laneImplemented"])
+
+
+class DockerLaneSelectionTests(unittest.TestCase):
+    def test_docker_jobs_select_the_image_profile_from_the_descriptor(self):
+        text = _read(VALIDATE)
+
+        for job in ("docker-build", "docker-push"):
+            with self.subTest(job=job):
+                block = _job_block(text, job)
+                self.assertIn(
+                    "build_mode: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'source' || 'java-artifact' }}",
+                    block,
+                )
+                self.assertIn(
+                    "dockerfile_path: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'build/python/Dockerfile' || 'build/Dockerfile' }}",
+                    block,
+                )
+                self.assertIn(
+                    "platforms: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'linux/amd64' || '' }}",
+                    block,
+                )
+                self.assertIn("app_module: ${{ needs.read-service-config.outputs.app_module }}", block)
+                # Java behaviour is preserved: the conventional JAR path is still passed.
+                self.assertIn("jar_file: ${{ vars.SERVICE_TARGET_JAR ||", block)
+
+    def test_docker_jobs_run_for_either_lane_without_breaking_the_java_gate(self):
+        text = _read(VALIDATE)
+
+        for job in ("docker-build", "docker-push"):
+            with self.subTest(job=job):
+                block = _job_block(text, job)
+                # A skipped sibling lane must not skip the image job, but a failed or
+                # skipped selected lane still must.
+                self.assertIn("!cancelled()", block)
+                self.assertIn(
+                    "needs.java-build.result == 'success' && needs.java-build.outputs.build_result == 'success'",
+                    block,
+                )
+                self.assertIn(
+                    "needs.python-build.result == 'success' && needs.python-build.outputs.build_result == 'success'",
+                    block,
+                )
+
+    def test_docker_push_keeps_the_adr_036_trust_clause(self):
+        block = _job_block(_read(VALIDATE), "docker-push")
+        condition = block.split("if: |", 1)[1].split("runs-on:", 1)[0]
+
+        self.assertIn("github.actor != 'dependabot[bot]'", condition)
+        self.assertIn("github.event_name != 'pull_request_target'", condition)
+        self.assertIn("github.event_name != 'workflow_dispatch'", condition)
+        self.assertIn(
+            "(github.event_name != 'pull_request' ||\n           github.event.pull_request.head.repo.full_name == github.repository)",
+            condition,
+        )
+        self.assertIn("inputs.force_full_pipeline == true", condition)
+        # Losing the docker-build gate would push an image the validate job rejected.
+        # It must sit outside the trust disjunction so the force_full_pipeline arm — which
+        # previously inherited GitHub's implicit success() — cannot push a failed build.
+        self.assertIn("needs.docker-build.result == 'success'", condition)
+        self.assertLess(
+            condition.index("needs.docker-build.result == 'success'"),
+            condition.index("inputs.force_full_pipeline == true"),
+        )
+        self.assertLess(
+            condition.index("needs.java-build.outputs.build_result == 'success'"),
+            condition.index("github.actor != 'dependabot[bot]'"),
+        )
+
+    def test_deploy_and_integration_tests_remain_java_only(self):
+        text = _read(VALIDATE)
+
+        for job in ("deploy", "integration-test"):
+            with self.subTest(job=job):
+                block = _job_block(text, job)
+                self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
+                self.assertIn("needs.java-build.outputs.build_result == 'success'", block)
+                self.assertNotIn("python-build", block)
+                # No status function: a skipped java-build keeps the deploy lane skipped.
+                self.assertNotIn("!cancelled()", block)
+                self.assertNotIn("always()", block)
+
+    def test_required_summary_aggregates_the_python_lane(self):
+        summary = _read(VALIDATE).split("docker-build-required:", 1)[1]
+
+        self.assertIn("python-build", summary.split("steps:", 1)[0])
+        self.assertIn('needs.python-build.result }}" = "failure"', summary)
+        self.assertIn('needs.read-service-config.outputs.build_lane }}" = "python"', summary)
+        self.assertIn('needs.python-build.result }}" != "success"', summary)
+        self.assertIn('needs.docker-build.result }}" != "success"', summary)
+        # The required context name may never change (ADR-030).
+        self.assertIn(REQUIRED_CHECK_CONTEXT, _read(VALIDATE))
+
+    def test_validation_report_covers_the_python_lane(self):
+        block = _job_block(_read(VALIDATE), "code-validation")
+
+        self.assertIn('needs.read-service-config.outputs.build_lane }}" == "python"', block)
+        self.assertIn("Python Build Successful", block)
+        self.assertIn("Python Build Failed", block)
+        self.assertIn("Java Build Successful", block)
+
+
+@unittest.skipUnless(BASH_READY, "bash is not available on this host")
+class InitializationDetectionTests(unittest.TestCase):
+    """A Python repository must never look uninitialized (and pass vacuously)."""
+
+    REPOSITORIES = {
+        "maven service": {"pom.xml": "<project/>"},
+        "uv python service": {"pyproject.toml": "[project]\n", "uv.lock": "version = 1\n"},
+        "descriptor only": {".spi/service.yaml": "schemaVersion: 1\n"},
+        "java source tree": {"src/main/java/App.java": "class App {}\n"},
+    }
+
+    def _initialized(self, workflow: Path, files: dict) -> str:
+        step = _step_script(workflow, "check-repo-state", "Check Repository Initialization")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name, content in files.items():
+                target = root / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(content, encoding="utf-8")
+            output = root / "outputs.txt"
+            output.write_text("", encoding="utf-8")
+            script = (
+                'cd "$1" || exit 3\n'
+                'export GITHUB_OUTPUT="$2"\n'
+                + step
+            )
+            result = subprocess.run(
+                ["bash", "-s", _posix_path(root), _posix_path(output)],
+                input=script.encode("utf-8"),
+                capture_output=True,
+                timeout=120,
+            )
+            self.assertEqual(0, result.returncode, result.stderr.decode())
+            return output.read_text(encoding="utf-8").strip()
+
+    def test_supported_service_shapes_are_recognised(self):
+        for workflow in (VALIDATE, BUILD):
+            for label, files in self.REPOSITORIES.items():
+                with self.subTest(workflow=workflow.name, repository=label):
+                    self.assertEqual("initialized=true", self._initialized(workflow, files))
+
+    def test_an_empty_repository_is_still_uninitialized(self):
+        for workflow in (VALIDATE, BUILD):
+            with self.subTest(workflow=workflow.name):
+                self.assertEqual(
+                    "initialized=false", self._initialized(workflow, {"README.md": "#\n"})
+                )
+
+    def test_python_repository_reports_the_python_marker(self):
+        step = _step_script(VALIDATE, "check-repo-state", "Check if Python Repository")
+
+        self.assertIn("pyproject.toml", step)
+        self.assertIn("uv.lock", step)
+
+    def test_structural_initialization_check_accepts_python_and_the_descriptor(self):
+        block = _job_block(_read(VALIDATE), "check-initialization")
+
+        self.assertIn('[ -f ".spi/service.yaml" ]', block)
+        self.assertIn('[ -f "pyproject.toml" ] && [ -f "uv.lock" ]', block)
+        self.assertIn("SERVICE_SHAPE", block)
+        # A present-but-invalid descriptor must still reach read-service-config.
+        self.assertIn("read-service-config will fail the required check", block)
 
 
 class SettingsAndOwnershipTests(unittest.TestCase):

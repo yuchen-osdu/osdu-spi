@@ -84,6 +84,15 @@ class ResolvedConfig:
     build_lane: str = "none"
     lane_implemented: str = "false"
     fallback: str = "none"
+    # Python lane inputs. Every value is schema-constrained (closed enum, PEP 508
+    # name, dotted module or extras list), so a workflow may pass them straight to
+    # the python-build action and the canonical Python image build arguments.
+    python_runtime_version: str = ""
+    python_distribution: str = ""
+    python_import_package: str = ""
+    python_test_extras: str = ""
+    python_runtime_extras: str = ""
+    app_module: str = ""
     errors: List[ValidationError] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
@@ -101,6 +110,12 @@ class ResolvedConfig:
             "build_lane": self.build_lane,
             "lane_implemented": self.lane_implemented,
             "fallback": self.fallback,
+            "python_runtime_version": self.python_runtime_version,
+            "python_distribution": self.python_distribution,
+            "python_import_package": self.python_import_package,
+            "python_test_extras": self.python_test_extras,
+            "python_runtime_extras": self.python_runtime_extras,
+            "app_module": self.app_module,
         }
 
     def to_json_dict(self, redact: bool = False) -> Dict[str, Any]:
@@ -475,7 +490,9 @@ def _validate_value(
         if len(value) > rule.get("maxLength", 120):
             errors.append(ValidationError(path, "too-long", "path is too long"))
             return
-        if value.startswith("/") or ".." in value.split("/") or not _PATH_RE.match(value):
+        # fullmatch, not match: Python's '$' also matches before a trailing newline, and
+        # these values are written to $GITHUB_OUTPUT and build arguments.
+        if value.startswith("/") or ".." in value.split("/") or not _PATH_RE.fullmatch(value):
             errors.append(
                 ValidationError(
                     path,
@@ -498,7 +515,7 @@ def _validate_value(
                 )
             )
             return
-        if "pattern" in rule and not re.match(rule["pattern"], value):
+        if "pattern" in rule and not re.fullmatch(rule["pattern"], value):
             errors.append(
                 ValidationError(path, "invalid-value", f"'{value}' does not match {rule['pattern']}")
             )
@@ -507,6 +524,17 @@ def _validate_value(
         return
 
     errors.append(ValidationError(path, "schema-error", f"unsupported schema type '{expected}'"))
+
+
+def _lookup(document: Dict[str, Any], dotted: str) -> Any:
+    """Return the value at a dotted descriptor path, or None when absent."""
+
+    node: Any = document
+    for part in dotted.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return None
+        node = node[part]
+    return node
 
 
 def _validate_consistency(
@@ -527,6 +555,20 @@ def _validate_consistency(
                 f"archetype '{archetype}' requires the '{defaults['dockerfileProfile']}' Dockerfile profile",
             )
         )
+
+    # Archetype-conditional required keys. The Python image bakes its uvicorn target at
+    # build time (the Stack chart cannot override a container command), so a Python
+    # descriptor without `container.appModule` would produce an unstartable image; it is
+    # rejected here rather than at container start.
+    for dotted in archetype_rule.get("requiredKeys", []):
+        if _lookup(document, dotted) is None:
+            errors.append(
+                ValidationError(
+                    dotted,
+                    "missing-key",
+                    f"archetype '{archetype}' requires '{dotted}'",
+                )
+            )
 
     allowed_test_types = {defaults["unitTestType"], "postman"}
     for suite, definition in document.get("tests", {}).items():
@@ -628,6 +670,19 @@ def resolve(
     config.unit_test_type = unit.get("type", defaults["unitTestType"])
     coverage = unit.get("coverage", defaults["coverage"])
     config.has_coverage = "false" if coverage in (False, "none") else "true"
+
+    if config.build_lane == "python":
+        python = document.get("build", {}).get("python", {})
+        config.python_runtime_version = python.get(
+            "runtimeVersion", defaults.get("runtimeVersion", "")
+        )
+        config.python_distribution = python.get("distribution", "")
+        config.python_import_package = python.get("importPackage", "")
+        # Lists are joined with commas: the python-build action and the canonical image
+        # both take comma-separated extras, and every entry is pattern-validated above.
+        config.python_test_extras = ",".join(python.get("testExtras", []))
+        config.python_runtime_extras = ",".join(python.get("runtimeExtras", []))
+        config.app_module = document.get("container", {}).get("appModule", "")
 
     if document["schemaVersion"] in schema.get("deprecatedSchemaVersions", []):
         config.warnings.append(

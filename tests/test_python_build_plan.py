@@ -350,6 +350,77 @@ class PlanOutputTests(unittest.TestCase):
             self.assertIn("tests/unit", summary)
 
 
+class DescriptorToActionContractTests(unittest.TestCase):
+    """The generated descriptor must be directly usable as python-build inputs.
+
+    This is the seam the workflows rely on: `read-service-config` outputs become
+    action inputs verbatim. A pattern that the schema accepts but the plan resolver
+    rejects (or vice versa) would only surface in a fork's first Python build.
+    """
+
+    def _generate_and_resolve(self, root: Path):
+        descriptor_module = _load_module(
+            "descriptor_for_plan", ".github/scripts/service-config/descriptor.py"
+        )
+        generator = _load_module(
+            "generate_descriptor_for_plan",
+            ".github/scripts/service-config/generate_descriptor.py",
+        )
+        archetype, _ = generator.detect_archetype(root)
+        app_module, _ = generator.detect_app_module(root)
+        target = root / ".spi"
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "service.yaml").write_text(
+            generator.render_descriptor(archetype, "wellbore-worker", root, app_module),
+            encoding="utf-8",
+        )
+        return descriptor_module.resolve(root)
+
+    def test_generated_descriptor_outputs_resolve_into_a_valid_build_plan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = _write_repo(Path(directory))
+            (root / "src" / "wdmsworker" / "app.py").write_text(
+                "from fastapi import FastAPI\n\napp = FastAPI()\n", encoding="utf-8"
+            )
+
+            config = self._generate_and_resolve(root)
+            self.assertTrue(config.valid, [error.render() for error in config.errors])
+
+            outputs = config.outputs()
+            # Exactly what build.yml / validate.yml pass to the action.
+            plan = plan_module.resolve_plan(
+                {
+                    "PYTHON_VERSION": outputs["python_runtime_version"] or "3.12",
+                    "PACKAGE_NAME": outputs["python_import_package"],
+                    "DISTRIBUTION_NAME": outputs["python_distribution"],
+                    "TEST_EXTRAS": outputs["python_test_extras"],
+                    "RUNTIME_EXTRAS": outputs["python_runtime_extras"],
+                    "GENERATE_COVERAGE": outputs["has_coverage"],
+                },
+                root,
+            )
+
+            self.assertEqual("3.12", plan.python_version)
+            self.assertEqual("wdmsworker", plan.package_name)
+            self.assertEqual("osdu-wbddms-worker", plan.distribution_name)
+            self.assertEqual(("dev",), plan.test_extras)
+            self.assertEqual(("az",), plan.runtime_extras)
+            self.assertTrue(plan.generate_coverage)
+            self.assertEqual("wdmsworker.app:app", outputs["app_module"])
+
+    def test_descriptor_app_module_matches_the_container_build_argument_pattern(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = _write_repo(Path(directory))
+            (root / "src" / "wdmsworker" / "app.py").write_text("app = object()\n", encoding="utf-8")
+
+            app_module = self._generate_and_resolve(root).outputs()["app_module"]
+
+            # Same expression prepare-build-args.sh enforces before the --build-arg.
+            self.assertRegex(
+                app_module, r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$"
+            )
+
+
 class ReportSummaryTests(unittest.TestCase):
     def _reports(self, root: Path) -> Path:
         (root / "junit").mkdir(parents=True)

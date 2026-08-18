@@ -67,12 +67,16 @@ build:
     distribution: osdu-wbddms-worker
     importPackage: wdmsworker
     testExtras: [dev]
+    runtimeExtras: [az]
 
 tests:
   unit:
     type: pytest
     path: tests/unit
     coverage: true
+
+container:
+  appModule: wdmsworker.app:app
 """
 
 
@@ -224,6 +228,62 @@ class DescriptorValidationTests(unittest.TestCase):
 
         self.assertIn("missing-key", _codes(descriptor.validate(document)))
 
+    def test_python_service_must_declare_a_container_application_module(self):
+        document = descriptor.parse(
+            "schemaVersion: 1\nservice:\n  name: demo\n  archetype: python-uv-fastapi\n"
+        )
+
+        errors = descriptor.validate(document)
+        self.assertIn("missing-key", _codes(errors))
+        self.assertTrue(any(error.path == "container.appModule" for error in errors))
+
+    def test_application_module_pattern_rejects_anything_but_module_colon_attribute(self):
+        head = (
+            "schemaVersion: 1\nservice:\n  name: demo\n  archetype: python-uv-fastapi\n"
+            "container:\n  appModule: "
+        )
+        unsafe = [
+            '"app.main:app; rm -rf /"',
+            '"app.main:app --reload"',
+            '"app.main"',
+            '"$(id)"',
+            '"app.main:app app.other:app"',
+            '"/etc/passwd:app"',
+        ]
+
+        for value in unsafe:
+            with self.subTest(value=value):
+                document = descriptor.parse(head + value + "\n")
+                self.assertIn("invalid-value", _codes(descriptor.validate(document)))
+
+        valid = descriptor.parse(head + "wdmsworker.app:app\n")
+        self.assertEqual([], descriptor.validate(valid))
+
+    def test_application_module_is_rejected_for_a_java_service(self):
+        document = descriptor.parse(
+            "schemaVersion: 1\nservice:\n  name: demo\n  archetype: java-maven-azure\n"
+            "container:\n  appModule: demo.app:app\n"
+        )
+
+        self.assertIn("archetype-mismatch", _codes(descriptor.validate(document)))
+
+    def test_pattern_validation_anchors_on_the_whole_value(self):
+        """A trailing newline must not satisfy a '$'-anchored pattern."""
+
+        document = {
+            "schemaVersion": 1,
+            "service": {"name": "demo", "archetype": "python-uv-fastapi"},
+            "container": {"appModule": "demo.app:app\nJAR_FILE=/etc/passwd"},
+        }
+        trailing = {
+            "schemaVersion": 1,
+            "service": {"name": "demo\n", "archetype": "python-uv-fastapi"},
+            "container": {"appModule": "demo.app:app"},
+        }
+
+        self.assertIn("invalid-value", _codes(descriptor.validate(document)))
+        self.assertIn("invalid-value", _codes(descriptor.validate(trailing)))
+
 
 class DescriptorResolutionTests(unittest.TestCase):
     def test_java_descriptor_selects_the_java_lane(self):
@@ -244,19 +304,47 @@ class DescriptorResolutionTests(unittest.TestCase):
                     "build_lane": "java",
                     "lane_implemented": "true",
                     "fallback": "none",
+                    "python_runtime_version": "",
+                    "python_distribution": "",
+                    "python_import_package": "",
+                    "python_test_extras": "",
+                    "python_runtime_extras": "",
+                    "app_module": "",
                 },
                 config.outputs(),
             )
 
-    def test_python_descriptor_selects_the_python_lane_without_an_implementation(self):
+    def test_python_descriptor_publishes_the_python_lane_inputs(self):
         directory, root = _repository(PYTHON_DESCRIPTOR, markers=["pyproject.toml", "uv.lock"])
         with directory:
             config = descriptor.resolve(root)
 
             self.assertTrue(config.valid)
-            self.assertEqual("python", config.outputs()["build_lane"])
-            self.assertEqual("false", config.outputs()["lane_implemented"])
-            self.assertTrue(any("no build lane" in warning for warning in config.warnings))
+            outputs = config.outputs()
+            self.assertEqual("python", outputs["build_lane"])
+            self.assertEqual("true", outputs["lane_implemented"])
+            self.assertEqual("python", outputs["dockerfile_profile"])
+            self.assertEqual("3.12", outputs["python_runtime_version"])
+            self.assertEqual("osdu-wbddms-worker", outputs["python_distribution"])
+            self.assertEqual("wdmsworker", outputs["python_import_package"])
+            self.assertEqual("dev", outputs["python_test_extras"])
+            self.assertEqual("az", outputs["python_runtime_extras"])
+            self.assertEqual("wdmsworker.app:app", outputs["app_module"])
+            self.assertEqual([], config.warnings)
+
+    def test_minimal_python_descriptor_falls_back_to_the_runtime_default(self):
+        minimal = (
+            "schemaVersion: 1\n"
+            "service:\n  name: demo\n  archetype: python-uv-fastapi\n"
+            "container:\n  appModule: demo.app:app\n"
+        )
+        directory, root = _repository(minimal, markers=["pyproject.toml", "uv.lock"])
+        with directory:
+            outputs = descriptor.resolve(root).outputs()
+
+            self.assertEqual("3.12", outputs["python_runtime_version"])
+            self.assertEqual("", outputs["python_test_extras"])
+            self.assertEqual("demo.app:app", outputs["app_module"])
 
     def test_missing_descriptor_keeps_java_inference_with_a_warning(self):
         directory, root = _repository(markers=["pom.xml"])
@@ -345,6 +433,41 @@ class ReadServiceConfigCommandTests(unittest.TestCase):
             self.assertFalse(payload["valid"])
             self.assertIn("secrets: forbidden-key", payload["errors"])
             self.assertNotIn("all", " ".join(payload["errors"]))
+
+    def test_a_multi_line_service_name_cannot_inject_extra_outputs(self):
+        """$GITHUB_OUTPUT is line-based; the fallback name comes from a repository variable."""
+
+        directory, root = _repository(markers=["pom.xml"])
+        with directory:
+            output = root / "outputs.txt"
+            result = self._run(
+                root,
+                "--service-name",
+                "demo\nbuild_lane=python",
+                "--format",
+                "github",
+                "--output",
+                str(output),
+            )
+
+            self.assertEqual(1, result.returncode)
+            self.assertIn("multi-line output", result.stderr)
+            self.assertEqual("", output.read_text(encoding="utf-8") if output.exists() else "")
+
+    def test_python_outputs_are_published_for_the_workflow_contract(self):
+        directory, root = _repository(PYTHON_DESCRIPTOR, markers=["pyproject.toml", "uv.lock"])
+        with directory:
+            output = root / "outputs.txt"
+            result = self._run(root, "--format", "github", "--output", str(output))
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            written = output.read_text(encoding="utf-8")
+            self.assertIn("build_lane=python\n", written)
+            self.assertIn("lane_implemented=true\n", written)
+            self.assertIn("app_module=wdmsworker.app:app\n", written)
+            self.assertIn("python_runtime_version=3.12\n", written)
+            self.assertIn("python_test_extras=dev\n", written)
+            self.assertIn("python_runtime_extras=az\n", written)
 
 
 if __name__ == "__main__":

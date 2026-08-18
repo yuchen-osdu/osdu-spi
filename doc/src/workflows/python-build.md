@@ -97,7 +97,7 @@ Optional inputs share one convention:
 | Input | Default | Notes |
 | --- | --- | --- |
 | `python_version` | `3.12` | `MAJOR.MINOR` or `MAJOR.MINOR.PATCH` |
-| `uv_version` | `""` | Empty honours the repository `required-version` |
+| `uv_version` | `0.12.5` | Pinned to the uv release the canonical image installs with; an explicitly empty value honours the repository `required-version` |
 | `source_paths` | `""` | `src` when present, else the repository root |
 | `format_check_paths` | `""` | Repository root |
 | `package_name` | `""` | Detected from the source root; used for coverage and import smoke |
@@ -122,14 +122,58 @@ list of extras the project actually declares instead of a late resolver error.
 ## Caller prerequisites
 
 The composite action installs its own toolchain — the caller does not need to run
-`actions/setup-python` or `astral-sh/setup-uv` first. It checks out the repository with
-full history (`fetch-depth: 0`) because the lock/export drift gate compares the working
-tree with the commit.
+`actions/setup-python` or `astral-sh/setup-uv` first.
+
+The **caller owns the checkout**, exactly as it does for `java-build`. Check out with
+`fetch-depth: 0`: the lock/export drift gate compares the working tree with the commit.
+Under `pull_request_target` the caller checks out the reviewed ref and restores the
+trusted actions from `origin/main` before this action runs, so the action never decides
+which tree a privileged run sees.
 
 Callers must supply:
 
 - a runner with Docker-free Python build capability (`ubuntu-latest` is sufficient);
 - `index_token` only when the service resolves from an authenticated package index.
+
+## Workflow wiring
+
+Both copied workflows declare the lane statically — GitHub allows no expression in
+`uses:` — and gate it on the descriptor's language-neutral `build_lane` output
+([service descriptor](../architecture/service_descriptor.md)):
+
+```yaml
+  python-build:
+    name: "🐍 Python Build"
+    needs: [check-initialization, check-repo-state, check-paths, read-service-config]
+    if: needs.read-service-config.outputs.build_lane == 'python' && ...
+    steps:
+      - uses: actions/checkout@...      # caller-owned, fetch-depth: 0
+      - uses: ./.github/actions/python-build
+        with:
+          python_version: ${{ needs.read-service-config.outputs.python_runtime_version || '3.12' }}
+          package_name:   ${{ needs.read-service-config.outputs.python_import_package }}
+          test_extras:    ${{ needs.read-service-config.outputs.python_test_extras }}
+          runtime_extras: ${{ needs.read-service-config.outputs.python_runtime_extras }}
+```
+
+`validate.yml` then feeds the same descriptor into the image jobs. The `docker-build`
+action builds in **source mode** for the Python lane: no artifact is downloaded, no JAR is
+resolved, `build/python/Dockerfile` is used, and `container.appModule` plus
+`build.python.runtimeExtras` become validated build arguments:
+
+| Job | Lane | `build_mode` | Dockerfile | Platforms |
+| --- | --- | --- | --- | --- |
+| `🐳 Docker Build (validate)` | Java | `java-artifact` | `build/Dockerfile` | `linux/amd64` |
+| `🐳 Docker Build (validate)` | Python | `source` | `build/python/Dockerfile` | `linux/amd64` |
+| `🐳 Docker Push` | Java | `java-artifact` | `build/Dockerfile` | `linux/amd64,linux/arm64` |
+| `🐳 Docker Push` | Python | `source` | `build/python/Dockerfile` | `linux/amd64` |
+
+The required `🐳 Docker Build` context is unchanged; its summary job now aggregates the
+Python build and the selected image build, and a *present* Python descriptor can only pass
+when both actually succeeded.
+
+Deploy and integration-test stay Java-only and are explicitly gated on
+`build_lane == 'java'`. The Python lane ends at a published GHCR image.
 
 ## Canonical Python Dockerfile
 
@@ -159,8 +203,8 @@ Key properties:
 
 | Argument | Default | Notes |
 | --- | --- | --- |
-| `RUNTIME_EXTRAS` | `""` | Comma-separated extras (e.g. `az`); each entry is character-validated inside the build |
-| `APP_MODULE` | `""` | Required ASGI target, e.g. `wdmsworker.app:app` |
+| `RUNTIME_EXTRAS` | `""` | Comma-separated extras (e.g. `az`); each entry is character-validated inside the build. Supplied by the workflow from `build.python.runtimeExtras` |
+| `APP_MODULE` | `""` | Required ASGI target, e.g. `wdmsworker.app:app`. Supplied by the workflow from `container.appModule`; the `docker-build` action refuses a source-mode build without it |
 | `APP_PORT` | `8080` | Also used by `EXPOSE` |
 | `APP_HOST` | `0.0.0.0` | |
 | `UVICORN_WORKERS` | `1` | |
@@ -171,7 +215,9 @@ Key properties:
 
 ### Package index credentials
 
-Private index credentials must be provided as a BuildKit secret:
+Private index credentials must be provided as a BuildKit secret. The secret mount is
+optional: the pilot builds without one, and the workflows pass no secret because the
+pilot's dependencies resolve from public indexes.
 
 ```bash
 docker build \

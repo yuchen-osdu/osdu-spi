@@ -78,8 +78,9 @@ After the upstream tree is merged, initialization runs `generate_descriptor.py`:
 | Markers | Result |
 | --- | --- |
 | `pom.xml` | minimal `java-maven-azure` descriptor |
-| `pyproject.toml` + `uv.lock` | minimal `python-uv-fastapi` descriptor |
+| `pyproject.toml` + `uv.lock` | `python-uv-fastapi` descriptor including the detected runtime, distribution, import package, extras and `container.appModule` |
 | both, neither, or `pyproject.toml` without `uv.lock` | halt with an actionable error |
+| Python service whose ASGI module is missing or ambiguous | halt: the module is a container entrypoint and must be reviewed, not guessed |
 
 An existing descriptor is never overwritten. Unknown service shapes halt rather than silently
 selecting a default build lane.
@@ -91,18 +92,29 @@ selecting a default build lane.
 ```text
 descriptor_present  schema_version  archetype     service_name  dockerfile_profile
 unit_test_type      has_coverage    build_lane    lane_implemented  fallback
+python_runtime_version  python_distribution  python_import_package
+python_test_extras      python_runtime_extras  app_module
 ```
 
 Job outputs never carry shell commands. Language lanes are statically declared and gated on
-`build_lane`. The Java lane keeps its name, its action, and `vars.MAVEN_PROFILE` handling.
+`build_lane`. The Java lane keeps its name, its action, and `vars.MAVEN_PROFILE` handling. The
+Python outputs are the `python-build` action's inputs and the canonical Python image's build
+arguments, so a service parameterises its build by editing the reviewed descriptor rather than the
+copied workflow. `container.appModule` uses a narrow `<dotted.module>:<attribute>` pattern because
+it becomes a container entrypoint value.
 
 ### 5. Stable required check that fails closed
 
 The required context stays exactly `🐳 Docker Build`. Renaming it would wedge open pull requests
 until every fork's ruleset is reconciled (ADR-030). The summary job now fails when the descriptor
-is invalid, and fails when a *present* descriptor declares an archetype whose lane is not installed
-in the running template version. Only these cases still pass as a skip: uninitialized repository,
-Dependabot, config/docs-only changes, and `build_lane == none` (no descriptor and no Maven markers).
+is invalid, fails when a *present* descriptor declares an archetype whose lane is not installed
+in the running template version, and fails when the selected lane did not actually build and
+validate an image. Only these cases still pass as a skip: uninitialized repository, Dependabot,
+config/docs-only changes, and `build_lane == none` (no descriptor and no Maven markers).
+
+Initialization detection follows the same rule: the descriptor, Maven markers and uv Python markers
+all count as an initialized service, so a Python repository can never pass the required check by
+looking uninitialized.
 
 ### 6. `.spi/**` is build-relevant
 
@@ -143,8 +155,11 @@ sync exclusion now describe complementary behaviour rather than deleting ownersh
 2. `settings-apply` reports descriptor and `/.spi/` ownership gaps through the existing
    `human-required` onboarding issue (this ADR).
 3. Initialization generates descriptors for new repositories (this ADR).
-4. Add the `python-build` action, Dockerfile profile and static `python-build` job; flip
-   `laneImplemented` for `python-uv-fastapi` (follow-up, tracked by issue #42).
+4. Add the `python-build` action, Dockerfile profile and static `python-build` job; generalize
+   `docker-build` with a `source` build mode; flip `laneImplemented` for `python-uv-fastapi`
+   (done, issue #42). Python deployment and integration testing remain out of scope: the lane
+   ends at a published GHCR image and the deploy jobs are explicitly gated on
+   `build_lane == 'java'`.
 5. Pilot descriptors: Partition, then Entitlements, then the Python pilot.
 6. Once the fleet has descriptors, remove the remaining per-workflow language inference in
    `cascade.yml` and `dependabot-validation.yml`, keeping a documented compatibility window.

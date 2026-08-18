@@ -69,8 +69,13 @@ class DescriptorGenerationTests(unittest.TestCase):
     def test_uv_python_repository_receives_a_python_descriptor(self):
         directory, root = _repository(
             {
-                "pyproject.toml": '[project]\nname = "osdu-wbddms-worker"\nrequires-python = ">=3.12,<3.14"\n',
+                "pyproject.toml": (
+                    '[project]\nname = "osdu-wbddms-worker"\nrequires-python = ">=3.12,<3.14"\n\n'
+                    '[project.optional-dependencies]\ndev = ["pytest"]\naz = ["azure-identity"]\n'
+                ),
                 "uv.lock": "version = 1\n",
+                "src/wdmsworker/__init__.py": "",
+                "src/wdmsworker/app.py": "from fastapi import FastAPI\n\napp = FastAPI()\n",
             }
         )
         with directory:
@@ -85,10 +90,87 @@ class DescriptorGenerationTests(unittest.TestCase):
             self.assertIn("lockfile: uv.lock", generated)
             self.assertIn('runtimeVersion: "3.12"', generated)
             self.assertIn("distribution: osdu-wbddms-worker", generated)
+            self.assertIn("importPackage: wdmsworker", generated)
+            self.assertIn("testExtras: [dev]", generated)
+            self.assertIn("runtimeExtras: [az]", generated)
+            self.assertIn("appModule: wdmsworker.app:app", generated)
 
             config = descriptor.resolve(root)
-            self.assertTrue(config.valid)
+            self.assertTrue(config.valid, [error.render() for error in config.errors])
             self.assertEqual("python", config.outputs()["build_lane"])
+            self.assertEqual("wdmsworker.app:app", config.outputs()["app_module"])
+
+    def test_python_generation_halts_when_the_application_module_is_unclear(self):
+        base = {
+            "pyproject.toml": '[project]\nname = "demo"\n',
+            "uv.lock": "version = 1\n",
+        }
+        cases = {
+            "no package at all": ({}, "No importable Python package"),
+            "package without an app module": (
+                {"src/demo/__init__.py": "", "src/demo/main.py": "x = 1\n"},
+                "No unambiguous ASGI application module",
+            ),
+            "app module without an app attribute": (
+                {"src/demo/__init__.py": "", "src/demo/app.py": "def create_app():\n    pass\n"},
+                "No unambiguous ASGI application module",
+            ),
+            "two candidate packages": (
+                {
+                    "src/one/__init__.py": "",
+                    "src/one/app.py": "app = 1\n",
+                    "src/two/__init__.py": "",
+                    "src/two/app.py": "app = 2\n",
+                },
+                "Several packages define an ASGI application module",
+            ),
+        }
+
+        for label, (extra, expected) in cases.items():
+            with self.subTest(label=label):
+                directory, root = _repository({**base, **extra})
+                with directory:
+                    result = _run("generate_descriptor.py", "--root", str(root))
+
+                    self.assertEqual(2, result.returncode)
+                    self.assertIn(expected, result.stdout)
+                    self.assertIn("hand-written .spi/service.yaml", result.stdout)
+                    self.assertFalse((root / ".spi" / "service.yaml").exists())
+
+    def test_python_check_mode_reports_the_detected_application_module(self):
+        directory, root = _repository(
+            {
+                "pyproject.toml": '[project]\nname = "demo"\n',
+                "uv.lock": "version = 1\n",
+                "src/demo/__init__.py": "",
+                "src/demo/app.py": "app = object()\n",
+            }
+        )
+        with directory:
+            result = _run("generate_descriptor.py", "--root", str(root), "--check")
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn("demo.app:app", result.stdout)
+            self.assertFalse((root / ".spi" / "service.yaml").exists())
+
+    def test_flat_layout_python_project_is_supported(self):
+        directory, root = _repository(
+            {
+                "pyproject.toml": '[project]\nname = "demo"\n',
+                "uv.lock": "version = 1\n",
+                "demo/__init__.py": "",
+                "demo/app.py": "app: object = object()\n",
+                "tests/__init__.py": "",
+                "tests/app.py": "app = 1\n",
+            }
+        )
+        with directory:
+            result = _run("generate_descriptor.py", "--root", str(root), "--service-name", "demo")
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertIn(
+                "appModule: demo.app:app", (root / ".spi" / "service.yaml").read_text(encoding="utf-8")
+            )
 
     def test_halts_on_ambiguous_or_unsupported_repositories(self):
         cases = {

@@ -17,11 +17,13 @@
     "python-uv-fastapi": {
       "description": "Python service managed with uv and a committed uv.lock, served by FastAPI/uvicorn.",
       "lane": "python",
-      "laneImplemented": false,
+      "laneImplemented": true,
+      "requiredKeys": ["container.appModule"],
       "defaults": {
         "dockerfileProfile": "python",
         "unitTestType": "pytest",
-        "coverage": "pytest-cov"
+        "coverage": "pytest-cov",
+        "runtimeVersion": "3.12"
       }
     }
   },
@@ -173,6 +175,13 @@
         "dockerfileProfile": {
           "type": "string",
           "enum": ["java", "python"]
+        },
+        "appModule": {
+          "$comment": "ASGI target baked into the canonical Python image (uvicorn <module>:<attribute>). Deliberately stricter than a free-form string: dotted import path, a single colon, and a plain attribute name only, so the value can never carry shell metacharacters, spaces or options into a build argument.",
+          "type": "string",
+          "archetypes": ["python-uv-fastapi"],
+          "maxLength": 120,
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*$"
         }
       }
     }

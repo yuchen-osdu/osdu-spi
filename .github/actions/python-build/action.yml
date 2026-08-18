@@ -5,6 +5,12 @@ description: 'Reusable Python (uv) build action: locked sync, lint, types, pytes
 # or a repository-relative path. There is no command/argument passthrough: the
 # action never evaluates a caller-supplied shell string (ADR-036 trust model).
 #
+# The caller owns the checkout, exactly as it does for java-build: workflows that
+# run under `pull_request_target` must check out the reviewed ref and restore the
+# trusted actions themselves before this action runs. Check out with
+# `fetch-depth: 0` — the lock/export drift gate diffs the working tree against the
+# commit.
+#
 # Optional inputs share one convention:
 #   ""     -> convention-based auto-detection (skips when nothing is found)
 #   "none" -> explicitly disabled
@@ -15,9 +21,12 @@ inputs:
     required: false
     default: '3.12'
   uv_version:
-    description: 'uv version (X.Y.Z, latest, latest-known). Empty makes setup-uv honour the required-version pinned in the repository uv.toml/pyproject.toml.'
+    description: 'uv version (X.Y.Z, latest, latest-known). Defaults to the version verified with the canonical Python image (build/python/Dockerfile). An explicitly empty value makes setup-uv honour the required-version pinned in the repository uv.toml/pyproject.toml.'
     required: false
-    default: ''
+    # Keep in step with the `ghcr.io/astral-sh/uv:<version>` stage in
+    # build/python/Dockerfile: CI must resolve the lockfile with the same uv the
+    # image installs it with, and a floating default would silently drift.
+    default: '0.12.5'
   source_paths:
     description: 'Comma-separated import roots linted and type checked (default: src when present, else the repository root).'
     required: false
@@ -122,10 +131,6 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
-      with:
-        fetch-depth: 0  # Lock/export drift compares the working tree against the commit
-
     - name: "Detect Python project"
       id: detect
       shell: bash
