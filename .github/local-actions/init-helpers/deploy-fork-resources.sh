@@ -45,9 +45,14 @@ if [[ -f ".github/fork-resources/copilot-instructions.md" ]]; then
   git add ".github/copilot-instructions.md"
 fi
 
-# Copy fork-specific Dependabot configuration
-if [[ -f ".github/fork-resources/dependabot.yml" ]]; then
-  echo "Installing fork-specific Dependabot configuration..."
+# Copy fork-specific Dependabot configuration (language-aware: Java/Maven or Python/uv)
+DEPENDABOT_SOURCE=".github/fork-resources/dependabot.yml"
+if [[ -f ".github/fork-resources/select-dependabot-config.sh" ]]; then
+  DEPENDABOT_SOURCE=$(bash ".github/fork-resources/select-dependabot-config.sh" --print-source)
+fi
+
+if [[ -f "$DEPENDABOT_SOURCE" ]]; then
+  echo "Installing fork-specific Dependabot configuration from $DEPENDABOT_SOURCE..."
 
   # Detect service name from repository name
   SERVICE_NAME=$(basename "$(git rev-parse --show-toplevel)")
@@ -55,7 +60,7 @@ if [[ -f ".github/fork-resources/dependabot.yml" ]]; then
 
   # Copy and replace <service> placeholders, escaping special characters in service name
   SERVICE_ESCAPED=${SERVICE_NAME//&/\\&}
-  sed "s|<service>|$SERVICE_ESCAPED|g" ".github/fork-resources/dependabot.yml" > ".github/dependabot.yml"
+  sed "s|<service>|$SERVICE_ESCAPED|g" "$DEPENDABOT_SOURCE" > ".github/dependabot.yml"
   git add ".github/dependabot.yml"
 fi
 

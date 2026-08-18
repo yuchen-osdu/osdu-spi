@@ -30,12 +30,14 @@ The workflow produces clear outcomes to help you understand the state of your ch
 
 ### Supported Project Types
 - **Descriptor-driven archetypes** - `.spi/service.yaml` declares the build archetype
-  ([service descriptor](../architecture/service_descriptor.md)); `java-maven-azure` is the
-  implemented lane, `python-uv-fastapi` is reserved and not yet installed
+  ([service descriptor](../architecture/service_descriptor.md))
 - **Java/Maven** - Selected by the descriptor, or inferred from `pom.xml` when a fork has no
   descriptor yet
 - **Java 17 runtime** - Uses Temurin distribution for consistent builds
 - **Community Maven repositories** - Supports GitLab-hosted OSDU dependencies
+- **Python/uv** - Detects projects with `pyproject.toml` and `uv.lock`; see the
+  [Python build profile](python-build.md) for phases, inputs, reports, and the canonical
+  Python container image
 
 ### Build Features
 - **Maven dependency caching** - Speeds up builds by caching `.m2/repository`

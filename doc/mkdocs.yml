@@ -125,6 +125,7 @@ nav:
       - Cascade: workflows/cascade.md
       - Validation: workflows/validation.md
       - Build: workflows/build.md
+      - Python Build Profile: workflows/python-build.md
       - Release: workflows/release.md
   - Decisions:
       - Index: adr/index.md
