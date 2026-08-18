@@ -61,6 +61,15 @@ def _bash_available() -> bool:
 
 
 BASH_READY = _bash_available()
+JQ_READY = (
+    BASH_READY
+    and subprocess.run(
+        ["bash", "-c", "command -v jq >/dev/null 2>&1"],
+        capture_output=True,
+        timeout=60,
+    ).returncode
+    == 0
+)
 
 
 def _job_block(workflow_text: str, job_id: str) -> str:
@@ -489,19 +498,66 @@ class InitializationDetectionTests(unittest.TestCase):
 
 
 class SettingsAndOwnershipTests(unittest.TestCase):
+    @unittest.skipUnless(BASH_READY and JQ_READY, "bash and jq are required")
     def test_deploy_readiness_uses_the_onboarded_identity_variable(self):
-        for script_path in (CHECK_VARIABLES, SETUP_RULESETS):
-            with self.subTest(script=script_path.name):
-                script = _read(script_path)
-                self.assertNotIn("actions/secrets", script)
-                if 'have_var "AZURE_CLIENT_ID"' in script:
-                    self.assertIn('have_var()    { grep -qx "$1" <<< "$variable_names"; }', script)
-                else:
-                    self.assertIn(
-                        'grep -qx "AZURE_CLIENT_ID" <<< "$variable_names"',
-                        script,
-                    )
-                self.assertIn("azure/login", script)
+        required = (
+            "AZURE_CLIENT_ID",
+            "ACCEPTANCE_TEST_DIR",
+            "ACCEPTANCE_TEST_SECRET_MAP",
+            "ACCEPTANCE_TEST_DEPENDENCIES",
+            "K8S_DEPLOYMENT_NAME",
+            "K8S_CONTAINER_NAME",
+        )
+
+        def run(script_path: Path, names: tuple[str, ...]) -> subprocess.CompletedProcess:
+            with tempfile.TemporaryDirectory() as directory:
+                fake_bin = Path(directory)
+                fake_gh = fake_bin / "gh"
+                fake_gh.write_text(
+                    """#!/bin/sh
+case "$*" in
+  *actions/variables*) printf '%s\n' "$FAKE_VARIABLES_JSON" ;;
+  *rulesets*) printf '[]\n' ;;
+  *"issue list"*) printf '\n' ;;
+  *) printf '{}\n' ;;
+esac
+""",
+                    encoding="utf-8",
+                )
+                fake_gh.chmod(0o755)
+                runnable_script = fake_bin / script_path.name
+                runnable_script.write_text(
+                    _read(script_path).replace("\r\n", "\n"),
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                variables = {
+                    "variables": [{"name": name, "value": "configured"} for name in names]
+                }
+                env = os.environ.copy()
+                env["PATH"] = f"{_posix_path(fake_bin)}{os.pathsep}{env.get('PATH', '')}"
+                env["FAKE_VARIABLES_JSON"] = json.dumps([variables])
+                env["GH_TOKEN"] = "test-token"
+                return subprocess.run(
+                    ["bash", _posix_path(runnable_script), "owner/repo", "--dry-run"],
+                    cwd=ROOT,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                )
+
+        rules_ready = run(SETUP_RULESETS, required)
+        rules_missing = run(SETUP_RULESETS, required[1:])
+        manifest_ready = run(CHECK_VARIABLES, required)
+        manifest_missing = run(CHECK_VARIABLES, required[1:])
+
+        for result in (rules_ready, rules_missing, manifest_ready, manifest_missing):
+            self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("Deploy-ready: true", rules_ready.stdout)
+        self.assertIn("Deploy-ready: false", rules_missing.stdout)
+        self.assertNotIn("deploy identity `AZURE_CLIENT_ID`", manifest_ready.stdout)
+        self.assertIn("deploy identity `AZURE_CLIENT_ID`", manifest_missing.stdout)
 
     def test_initialization_removes_template_tests_without_removing_upstream_suites(self):
         config = json.loads(_read(SYNC_CONFIG))
