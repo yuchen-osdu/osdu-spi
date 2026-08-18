@@ -5,7 +5,11 @@
 - New CI/CD jobs (`docker-push`, `deploy`, `integration-test`) hold credentials with real blast radius:
   - `docker-push` uses `packages: write` on GHCR.
   - `deploy` / `integration-test` use an Azure federated identity with AKS Cluster User, a least-privilege custom Role on the shared `osdu` namespace, and Key Vault Secrets User.
-- The validate-only `docker-build` job runs with `permissions: contents: read` only (no GHCR write, no Azure login) and is therefore out of scope for this trust boundary.
+- The read-only `📦 Container Image Validation` job runs with
+  `permissions: contents: read` only (no GHCR write, no Azure login) and is
+  therefore out of scope for this trust boundary. Trusted runs repeat the
+  cache-backed BuildKit solve in `📤 Build & Publish Container Image`, whose
+  job-level `packages: write` permission is protected by this ADR.
 - GitHub event contexts are not equally trusted; some (`pull_request_target`, external-fork PRs, dependabot PRs) can place attacker-controlled code in a context with secret access. Running the credential-bearing jobs there would expose the cluster federated identity to attacker code, risking compromise across the current service forks.
 
 ## Decision
@@ -57,7 +61,11 @@ if: |
 
 ### Neutral
 
-- `docker-build` continues to run broadly because it carries no sensitive credentials.
+- Read-only container validation continues to run broadly because it carries no
+  sensitive credentials. Keeping it separate from publication costs a second,
+  normally cache-backed solve on trusted runs, but prevents untrusted jobs from
+  receiving registry write permission and lets Java validate the release
+  multi-arch platform set only on the publish path.
 - Dependabot keeps its dedicated validation path outside cluster-credential workflows.
 
 ## Alternatives Considered

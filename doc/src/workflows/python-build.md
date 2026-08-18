@@ -173,10 +173,10 @@ resolved, `build/python/Dockerfile` is used, and `container.appModule` plus
 
 | Job | Lane | `build_mode` | Dockerfile | Platforms |
 | --- | --- | --- | --- | --- |
-| `🐳 Docker Build (validate)` | Java | `java-artifact` | `build/Dockerfile` | `linux/amd64` |
-| `🐳 Docker Build (validate)` | Python | `source` | `build/python/Dockerfile` | `linux/amd64` |
-| `🐳 Docker Push` | Java | `java-artifact` | `build/Dockerfile` | `linux/amd64,linux/arm64` |
-| `🐳 Docker Push` | Python | `source` | `build/python/Dockerfile` | `linux/amd64` |
+| `📦 Container Image Validation` | Java | `java-artifact` | `build/Dockerfile` | `linux/amd64` |
+| `📦 Container Image Validation` | Python | `source` | `build/python/Dockerfile` | `linux/amd64` |
+| `📤 Build & Publish Container Image` | Java | `java-artifact` | `build/Dockerfile` | `linux/amd64,linux/arm64` |
+| `📤 Build & Publish Container Image` | Python | `source` | `build/python/Dockerfile` | `linux/amd64` |
 
 The required `🐳 Docker Build` context is unchanged; its summary job now aggregates the
 Python build and the selected image build, and a *present* Python descriptor can only pass
