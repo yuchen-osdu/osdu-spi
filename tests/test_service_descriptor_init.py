@@ -109,7 +109,7 @@ class DescriptorGenerationTests(unittest.TestCase):
         directory, root = _repository(
             {
                 "pyproject.toml": (
-                    '[project]\nname = "demo"\nrequires-python = ">=3.11,<3.14"\n'
+                    '[project]\nname = "demo"\nrequires-python = ">=3.11,<4"\n'
                 ),
                 "uv.lock": "version = 1\n",
                 "src/demo/__init__.py": "",
@@ -136,9 +136,11 @@ class DescriptorGenerationTests(unittest.TestCase):
         with directory:
             first = _run("generate_descriptor.py", "--root", str(root))
             second = _run("generate_descriptor.py", "--root", str(root))
+            check = _run("generate_descriptor.py", "--root", str(root), "--check")
 
             self.assertEqual(2, first.returncode)
             self.assertEqual(2, second.returncode)
+            self.assertEqual(2, check.returncode)
             self.assertIn("excludes the canonical Python 3.12 runtime", first.stdout)
             self.assertFalse((root / ".spi" / "service.yaml").exists())
 

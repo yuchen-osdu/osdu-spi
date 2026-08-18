@@ -117,7 +117,7 @@ def _requires_python_allows_canonical_runtime(specifier: str) -> bool:
     for raw_clause in specifier.split(","):
         clause = raw_clause.strip()
         match = re.fullmatch(
-            r"(~=|==|!=|<=|>=|<|>)\s*(\d+)(?:\.(\d+))?(?:\.(\d+|\*))?",
+            r"(~=|==|!=|<=|>=|<|>)\s*(\d+)(?:\.(\d+|\*))?(?:\.(\d+|\*))?",
             clause,
         )
         if not match:
@@ -129,7 +129,7 @@ def _requires_python_allows_canonical_runtime(specifier: str) -> bool:
             )
 
         operator, major, minor, patch = match.groups()
-        if minor is None or (patch is not None and patch != "*"):
+        if patch is not None and patch != "*":
             raise DetectionError(
                 f"requires-python '{specifier}' is more specific than the descriptor's "
                 f"Python {CANONICAL_PYTHON_RUNTIME} runtime line.",
@@ -137,23 +137,35 @@ def _requires_python_allows_canonical_runtime(specifier: str) -> bool:
                 "required runtime is supported by the python-uv-fastapi archetype.",
             )
 
-        required = (int(major), int(minor))
         runtime = _CANONICAL_RUNTIME_PARTS
-        wildcard = patch == "*"
-        if wildcard and operator not in {"==", "!="}:
+        wildcard_parts = 1 if minor == "*" else 2 if patch == "*" else 0
+        if wildcard_parts and operator not in {"==", "!="}:
             raise DetectionError(
                 f"Cannot safely evaluate requires-python '{specifier}' against "
                 f"the canonical Python {CANONICAL_PYTHON_RUNTIME} runtime.",
                 "Use a standard major/minor Python version constraint.",
             )
+        if operator == "~=" and minor is None:
+            raise DetectionError(
+                f"requires-python '{specifier}' uses an invalid compatible-release clause.",
+                "Use at least a major/minor compatible-release constraint such as '~=3.12'.",
+            )
+
+        required = (int(major), int(minor or 0)) if not wildcard_parts else (0, 0)
+        if wildcard_parts == 1:
+            equal = runtime[:1] == (int(major),)
+        elif wildcard_parts == 2:
+            equal = runtime == (int(major), int(minor))
+        else:
+            equal = runtime == required
 
         matches = {
             ">=": runtime >= required,
             ">": runtime > required,
             "<=": runtime <= required,
             "<": runtime < required,
-            "==": runtime == required,
-            "!=": runtime != required,
+            "==": equal,
+            "!=": not equal,
             "~=": runtime >= required and runtime[0] == required[0],
         }[operator]
         if not matches:
@@ -368,18 +380,18 @@ def main(argv=None) -> int:
         print(f"::error::{error.remediation}")
         return 2
 
-    print(f"Detected archetype '{archetype}' from: {', '.join(evidence)}")
-    if app_module:
-        print(f"Detected application module '{app_module}'")
-    if args.check:
-        return 0
-
     try:
         rendered = render_descriptor(archetype, service_name, root, app_module)
     except DetectionError as error:
         print(f"::error::Service descriptor generation halted: {error}")
         print(f"::error::{error.remediation}")
         return 2
+
+    print(f"Detected archetype '{archetype}' from: {', '.join(evidence)}")
+    if app_module:
+        print(f"Detected application module '{app_module}'")
+    if args.check:
+        return 0
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(rendered, encoding="utf-8")
