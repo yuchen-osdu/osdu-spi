@@ -311,16 +311,28 @@ class ServiceConfigPreludeTests(unittest.TestCase):
         for workflow in (VALIDATE, BUILD):
             with self.subTest(workflow=workflow.name):
                 text = _read(workflow)
+                python_build = _job_block(text, "python-build")
                 job = _job_block(text, "python-compatibility")
                 self.assertIn('name: "🐍 Python Compatibility"', job)
                 self.assertNotIn("${{ matrix.", job.split("needs:", 1)[0])
-                self.assertIn("python-build", job.split("if:", 1)[0])
+                self.assertIn("needs: [python-build]", job)
+                self.assertIn("if: needs.python-build.result == 'success'", job)
+                self.assertNotIn("needs.read-service-config", job)
                 self.assertIn(
-                    "fromJSON(needs.read-service-config.outputs.python_compatibility_matrix)",
+                    "fromJSON(needs.python-build.outputs.compatibility_matrix)",
                     job,
+                )
+                self.assertIn('name: "Publish Python Lane Contract"', python_build)
+                self.assertIn(
+                    "compatibility_matrix: ${{ steps.lane.outputs.compatibility_matrix }}",
+                    python_build,
                 )
                 self.assertIn("python_version: ${{ matrix.version }}", job)
                 self.assertIn("artifact_suffix: ${{ matrix.artifact_suffix }}", job)
+                self.assertIn(
+                    "package_name: ${{ needs.python-build.outputs.import_package }}",
+                    job,
+                )
 
         required = _job_block(_read(VALIDATE), "docker-build-required")
         required_needs = required.split("needs:", 1)[1].split("if:", 1)[0]
