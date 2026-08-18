@@ -121,7 +121,8 @@ The workflow runs these validation jobs:
 | **Repository State** | Detects project type | Identifies Java (`pom.xml`) and Python (`pyproject.toml` + `uv.lock`) repositories |
 | **Java Build** | Compiles and tests | Maven build, unit tests, dependency resolution |
 | **Python Build** | Syncs, lints and tests | Locked `uv sync`, ruff/mypy, pytest suites, runtime import smoke |
-| **Docker Build** | Validates the image | Canonical Java or Python image; the required summary aggregates the selected lane |
+| **Container Image Validation** | Builds without registry credentials | Canonical Java or Python image, amd64 |
+| **Build & Publish Container Image** | Trusted release build and GHCR push | Java multi-arch or Python amd64 |
 | **Code Validation** | Process compliance | Conventional commits, merge conflicts, branch status |
 
 ## Branch-Specific Rules
@@ -151,7 +152,9 @@ All protected branches use the same validation rules, with exemptions for specif
 ### Required Checks
 - `check-initialization` - Repository setup verification
 - `java-build` / `python-build` - The language lane selected by the service descriptor
-- `🐳 Docker Build` - Always-reporting summary of the selected build lane and the validate-only image build
+- `📦 Container Image Validation` - Actual read-only image build
+- `🐳 Docker Build` - Always-reporting required summary context
+- `📤 Build & Publish Container Image` - Trusted release-platform build and GHCR publication
 - `code-validation` - Conventional commits, merge conflicts, branch status
 
 ### Check Exemptions

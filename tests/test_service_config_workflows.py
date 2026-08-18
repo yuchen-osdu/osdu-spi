@@ -195,7 +195,8 @@ class ServiceConfigPreludeTests(unittest.TestCase):
         text = _read(VALIDATE)
 
         self.assertIn(REQUIRED_CHECK_CONTEXT, text)
-        self.assertIn('name: "🐳 Docker Build (validate)"', text)
+        self.assertIn('name: "📦 Container Image Validation"', text)
+        self.assertIn('name: "📤 Build & Publish Container Image"', text)
 
     def test_required_check_fails_closed_for_a_present_but_unsupported_archetype(self):
         text = _read(VALIDATE)
@@ -311,6 +312,9 @@ class ServiceConfigPreludeTests(unittest.TestCase):
             with self.subTest(workflow=workflow.name):
                 text = _read(workflow)
                 job = _job_block(text, "python-compatibility")
+                self.assertIn('name: "🐍 Python Compatibility"', job)
+                self.assertNotIn("${{ matrix.", job.split("needs:", 1)[0])
+                self.assertIn("python-build", job.split("if:", 1)[0])
                 self.assertIn(
                     "fromJSON(needs.read-service-config.outputs.python_compatibility_matrix)",
                     job,
@@ -319,8 +323,9 @@ class ServiceConfigPreludeTests(unittest.TestCase):
                 self.assertIn("artifact_suffix: ${{ matrix.artifact_suffix }}", job)
 
         required = _job_block(_read(VALIDATE), "docker-build-required")
-        self.assertIn("python-compatibility", required)
-        self.assertIn("Python compatibility build failed", required)
+        required_needs = required.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("docker-build", required_needs)
+        self.assertNotIn("docker-push", required_needs)
 
     def test_no_obsolete_python_integration_point_remains(self):
         for workflow in (VALIDATE, BUILD):
@@ -360,20 +365,41 @@ class DockerLaneSelectionTests(unittest.TestCase):
     def test_docker_jobs_run_for_either_lane_without_breaking_the_java_gate(self):
         text = _read(VALIDATE)
 
-        for job in ("docker-build", "docker-push"):
-            with self.subTest(job=job):
-                block = _job_block(text, job)
-                # A skipped sibling lane must not skip the image job, but a failed or
-                # skipped selected lane still must.
-                self.assertIn("!cancelled()", block)
-                self.assertIn(
-                    "needs.java-build.result == 'success' && needs.java-build.outputs.build_result == 'success'",
-                    block,
-                )
-                self.assertIn(
-                    "needs.python-build.result == 'success' && needs.python-build.outputs.build_result == 'success'",
-                    block,
-                )
+        validation = _job_block(text, "docker-build")
+        # Python compatibility follows the canonical Python build, so the
+        # language graph has two lane endpoints before container handling.
+        self.assertIn("!cancelled()", validation)
+        self.assertIn(
+            "needs.java-build.result == 'success' && needs.java-build.outputs.build_result == 'success'",
+            validation,
+        )
+        self.assertIn("needs.python-compatibility.result == 'success'", validation)
+        validation_needs = validation.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("java-build", validation_needs)
+        self.assertIn("python-compatibility", validation_needs)
+        self.assertNotIn("python-build", validation_needs)
+
+        publish = _job_block(text, "docker-push")
+        publish_needs = publish.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("docker-build", publish_needs)
+        self.assertNotIn("java-build", publish_needs)
+        self.assertNotIn("python-build", publish_needs)
+        self.assertNotIn("python-compatibility", publish_needs)
+
+    def test_read_only_validation_precedes_credentialed_publication(self):
+        validate = _job_block(_read(VALIDATE), "docker-build")
+        publish = _job_block(_read(VALIDATE), "docker-push")
+
+        self.assertIn("contents: read", validate)
+        self.assertNotRegex(validate, r"(?m)^\s+packages:\s+write")
+        self.assertIn("packages: write", publish)
+        self.assertIn("needs.docker-build.result == 'success'", publish)
+        publish_needs = publish.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("docker-build", publish_needs)
+        self.assertIn("push: 'false'", validate)
+        self.assertIn("push: 'true'", publish)
+        self.assertIn('name: "📦 Container Image Validation"', validate)
+        self.assertIn('name: "📤 Build & Publish Container Image"', publish)
 
     def test_docker_push_keeps_the_adr_036_trust_clause(self):
         block = _job_block(_read(VALIDATE), "docker-push")
@@ -387,18 +413,13 @@ class DockerLaneSelectionTests(unittest.TestCase):
             condition,
         )
         self.assertIn("inputs.force_full_pipeline == true", condition)
-        # Losing the docker-build gate would push an image the validate job rejected.
-        # It must sit outside the trust disjunction so the force_full_pipeline arm — which
-        # previously inherited GitHub's implicit success() — cannot push a failed build.
+        # Publication may never bypass the preceding read-only image validation.
         self.assertIn("needs.docker-build.result == 'success'", condition)
         self.assertLess(
             condition.index("needs.docker-build.result == 'success'"),
             condition.index("inputs.force_full_pipeline == true"),
         )
-        self.assertLess(
-            condition.index("needs.java-build.outputs.build_result == 'success'"),
-            condition.index("github.actor != 'dependabot[bot]'"),
-        )
+        self.assertNotIn("needs.java-build", condition)
 
     def test_deploy_and_integration_tests_remain_java_only(self):
         text = _read(VALIDATE)
@@ -407,8 +428,6 @@ class DockerLaneSelectionTests(unittest.TestCase):
             with self.subTest(job=job):
                 block = _job_block(text, job)
                 self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
-                self.assertIn("needs.java-build.result == 'success'", block)
-                self.assertIn("needs.java-build.outputs.build_result == 'success'", block)
                 self.assertIn("needs.docker-push.result == 'success'", block)
                 self.assertNotIn("python-build", block)
                 # Static Python jobs are skipped for Java services. A status function
@@ -426,17 +445,19 @@ class DockerLaneSelectionTests(unittest.TestCase):
             with self.subTest(job=job):
                 condition = _job_block(text, job).split("if: |", 1)[1].split("runs-on:", 1)[0]
                 self.assertIn("!cancelled()", condition)
+                self.assertNotIn("needs.java-build", condition)
                 self.assertNotIn("needs.python-build", condition)
                 self.assertNotIn("needs.python-compatibility", condition)
 
     def test_required_summary_aggregates_the_python_lane(self):
         summary = _read(VALIDATE).split("docker-build-required:", 1)[1]
 
-        self.assertIn("python-build", summary.split("steps:", 1)[0])
-        self.assertIn('needs.python-build.result }}" = "failure"', summary)
-        self.assertIn('needs.read-service-config.outputs.build_lane }}" = "python"', summary)
-        self.assertIn('needs.python-build.result }}" != "success"', summary)
-        self.assertIn('needs.docker-build.result }}" != "success"', summary)
+        needs = summary.split("steps:", 1)[0]
+        self.assertIn("docker-build", needs)
+        self.assertNotIn("docker-push", needs)
+        self.assertNotIn("python-build", needs)
+        self.assertIn("Container image validated without registry write", summary)
+        self.assertIn("did not produce a container validation job", summary)
         # The required context name may never change (ADR-030).
         self.assertIn(REQUIRED_CHECK_CONTEXT, _read(VALIDATE))
 
