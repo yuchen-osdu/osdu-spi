@@ -27,18 +27,66 @@ Enforce a single trust-boundary model for credential-bearing jobs, per the event
 | Tag push (release-please) | Tagged commit (already in `main`) | Yes | **No** — tag pushes go through `release.yml`, not `validate.yml`; `release.yml` only re-tags the existing image with the semver (via `GITHUB_TOKEN` to GHCR — no `azure/login`) and does not re-deploy. No tag-scoped Azure federated subject is exercised today; `refs/tags/*` is provisioned only if a future registry pivot (§7.4) moves image auth to OIDC. |
 | Cascade workflow push to `fork_integration` | Cascade-resolved tree | Yes | Yes |
 
-Credential-bearing jobs use this gating clause:
+Credential-bearing jobs all replicate this **event-trust predicate**:
+
+```yaml
+(
+  github.actor != 'dependabot[bot]' &&
+  github.event_name != 'pull_request_target' &&
+  github.event_name != 'workflow_dispatch' &&
+  (github.event_name != 'pull_request' ||
+   github.event.pull_request.head.repo.full_name == github.repository)
+) || (
+  github.event_name == 'workflow_dispatch' &&
+  inputs.force_full_pipeline == true
+)
+```
+
+Each job combines that predicate with its actual direct predecessor:
+
+```yaml
+# Build & Publish Container Image
+if: |
+  !cancelled() &&
+  needs.docker-build.result == 'success' &&
+  ( <event-trust predicate above> )
+
+# Deploy to spi-stack (Java only)
+if: |
+  !cancelled() &&
+  needs.read-service-config.outputs.build_lane == 'java' &&
+  needs.docker-push.result == 'success' &&
+  vars.AZURE_CLIENT_ID != '' &&
+  ( <event-trust predicate above> )
+
+# Integration Tests (Java only)
+if: |
+  !cancelled() &&
+  needs.read-service-config.outputs.build_lane == 'java' &&
+  needs.docker-push.result == 'success' &&
+  needs.deploy.result == 'success' &&
+  vars.AZURE_CLIENT_ID != '' &&
+  ( <event-trust predicate above> )
+```
+
+The angle-bracket line is explanatory pseudocode; the checked-in workflow
+expands the full predicate at every credentialed job.
+
+For example, the publication job's concrete normal/dispatch arms are:
 
 ```yaml
 if: |
+  !cancelled() &&
+  needs.docker-build.result == 'success' &&
   (
-    needs.java-build.outputs.build_result == 'success' &&
     github.actor != 'dependabot[bot]' &&
     github.event_name != 'pull_request_target' &&
     github.event_name != 'workflow_dispatch' &&
     (github.event_name != 'pull_request' ||
      github.event.pull_request.head.repo.full_name == github.repository)
   ) || (
+    !cancelled() &&
+    needs.docker-build.result == 'success' &&
     github.event_name == 'workflow_dispatch' &&
     inputs.force_full_pipeline == true
   )
