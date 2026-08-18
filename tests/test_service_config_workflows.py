@@ -29,6 +29,7 @@ DEV_CI = ROOT / ".github" / "workflows" / "dev-ci.yml"
 SYNC_CONFIG = ROOT / ".github" / "sync-config.json"
 SCHEMA = ROOT / ".github" / "scripts" / "service-config" / "schema.json"
 CHECK_VARIABLES = ROOT / ".github" / "scripts" / "settings-apply" / "check-required-variables.sh"
+SETUP_RULESETS = ROOT / ".github" / "scripts" / "settings-apply" / "setup-rulesets.sh"
 DEPLOY_FORK_RESOURCES = (
     ROOT / ".github" / "local-actions" / "init-helpers" / "deploy-fork-resources.sh"
 )
@@ -488,6 +489,20 @@ class InitializationDetectionTests(unittest.TestCase):
 
 
 class SettingsAndOwnershipTests(unittest.TestCase):
+    def test_deploy_readiness_uses_the_onboarded_identity_variable(self):
+        for script_path in (CHECK_VARIABLES, SETUP_RULESETS):
+            with self.subTest(script=script_path.name):
+                script = _read(script_path)
+                self.assertNotIn("actions/secrets", script)
+                if 'have_var "AZURE_CLIENT_ID"' in script:
+                    self.assertIn('have_var()    { grep -qx "$1" <<< "$variable_names"; }', script)
+                else:
+                    self.assertIn(
+                        'grep -qx "AZURE_CLIENT_ID" <<< "$variable_names"',
+                        script,
+                    )
+                self.assertIn("azure/login", script)
+
     def test_initialization_removes_template_tests_without_removing_upstream_suites(self):
         config = json.loads(_read(SYNC_CONFIG))
         cleanup = {
