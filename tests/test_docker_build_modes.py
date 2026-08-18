@@ -24,6 +24,7 @@ ACTION_DIR = ROOT / ".github" / "actions" / "docker-build"
 ACTION_YML = ACTION_DIR / "action.yml"
 PREPARE = ACTION_DIR / "prepare-build-args.sh"
 PYTHON_DOCKERFILE = ROOT / "build" / "python" / "Dockerfile"
+PYTHON_DOCKERIGNORE = ROOT / "build" / "python" / "Dockerfile.dockerignore"
 
 HAS_YAML = importlib.util.find_spec("yaml") is not None
 
@@ -335,6 +336,31 @@ class ActionContractTests(unittest.TestCase):
 
 
 class PythonImageSecretTests(unittest.TestCase):
+    def test_python_build_context_excludes_local_environments_and_caches(self):
+        patterns = {
+            line.strip()
+            for line in _read(PYTHON_DOCKERIGNORE).splitlines()
+            if line.strip() and not line.startswith("#")
+        }
+
+        for required in (
+            ".git",
+            ".venv",
+            "venv",
+            "__pycache__",
+            ".pytest_cache",
+            ".mypy_cache",
+            ".ruff_cache",
+            ".spi-build-reports",
+            "dist",
+        ):
+            self.assertIn(required, patterns)
+
+        # The canonical entrypoint is copied from this tree, so build/ itself
+        # must remain in the context.
+        self.assertNotIn("build", patterns)
+        self.assertNotIn("build/", patterns)
+
     def test_netrc_secret_mount_stays_optional(self):
         dockerfile = _read(PYTHON_DOCKERFILE)
 
