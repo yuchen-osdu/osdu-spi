@@ -592,9 +592,8 @@ def _validate_consistency(
 def java_markers_present(root: Path) -> bool:
     """Legacy Java inference: the same signal the copied workflows used before ADR-039."""
 
-    if (root / "pom.xml").is_file():
-        return True
-    return any(root.glob("*/pom.xml")) or any(root.glob("*/*/pom.xml"))
+    excluded = {".git", ".venv", "node_modules", "target"}
+    return any(not excluded.intersection(path.relative_to(root).parts) for path in root.rglob("pom.xml"))
 
 
 def resolve(

@@ -114,7 +114,7 @@
           "properties": {
             "runtimeVersion": {
               "type": "string",
-              "enum": ["3.11", "3.12", "3.13"]
+              "enum": ["3.12"]
             },
             "compatibilityVersions": {
               "type": "list",

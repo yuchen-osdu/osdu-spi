@@ -71,6 +71,12 @@ jobs:
       build_lane: ${{ steps.config.outputs.build_lane }}
       lane_implemented: ${{ steps.config.outputs.lane_implemented }}
       fallback: ${{ steps.config.outputs.fallback }}
+      python_runtime_version: ${{ steps.config.outputs.python_runtime_version }}
+      python_distribution: ${{ steps.config.outputs.python_distribution }}
+      python_import_package: ${{ steps.config.outputs.python_import_package }}
+      python_test_extras: ${{ steps.config.outputs.python_test_extras }}
+      python_runtime_extras: ${{ steps.config.outputs.python_runtime_extras }}
+      app_module: ${{ steps.config.outputs.app_module }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 

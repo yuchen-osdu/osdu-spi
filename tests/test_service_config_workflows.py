@@ -244,6 +244,26 @@ class ServiceConfigPreludeTests(unittest.TestCase):
                 self.assertIn("fetch-depth: 0", job)
                 self.assertIn("uses: actions/checkout@", job)
 
+    def test_every_consumed_service_config_output_is_declared_by_the_prelude_job(self):
+        for workflow in (VALIDATE, BUILD):
+            with self.subTest(workflow=workflow.name):
+                text = _read(workflow)
+                prelude = _job_block(text, "read-service-config")
+                consumed = set(re.findall(r"needs\.read-service-config\.outputs\.([a-z_]+)", text))
+                declared = set(
+                    re.findall(
+                        r"^\s{6}([a-z_]+):\s+\$\{\{\s+steps\.config\.outputs\.\1\s+\}\}$",
+                        prelude,
+                        re.MULTILINE,
+                    )
+                )
+                self.assertEqual(set(), consumed - declared)
+
+    def test_initialization_never_executes_the_pr_head_descriptor_parser(self):
+        initialization = _job_block(_read(VALIDATE), "check-initialization")
+
+        self.assertNotIn("read_service_config.py", initialization)
+
     def test_python_lane_restores_trusted_actions_for_sync_pull_requests(self):
         job = _job_block(_read(VALIDATE), "python-build")
 
@@ -436,7 +456,7 @@ class InitializationDetectionTests(unittest.TestCase):
         self.assertIn('[ -f "pyproject.toml" ] && [ -f "uv.lock" ]', block)
         self.assertIn("SERVICE_SHAPE", block)
         # A present-but-invalid descriptor must still reach read-service-config.
-        self.assertIn("read-service-config will fail the required check", block)
+        self.assertIn("invalid descriptor must reach read-service-config", block)
 
 
 class SettingsAndOwnershipTests(unittest.TestCase):

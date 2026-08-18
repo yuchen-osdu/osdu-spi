@@ -216,6 +216,13 @@ class DescriptorValidationTests(unittest.TestCase):
                 )
                 self.assertIn(expected, _codes(descriptor.validate(document)))
 
+    def test_python_runtime_must_match_the_canonical_image(self):
+        document = descriptor.parse(
+            PYTHON_DESCRIPTOR.replace('runtimeVersion: "3.12"', 'runtimeVersion: "3.13"')
+        )
+
+        self.assertIn("invalid-value", _codes(descriptor.validate(document)))
+
     def test_rejects_an_invalid_service_name(self):
         document = descriptor.parse(
             "schemaVersion: 1\nservice:\n  name: Partition Service\n  archetype: java-maven-azure\n"
@@ -356,6 +363,14 @@ class DescriptorResolutionTests(unittest.TestCase):
             self.assertEqual("java-inference", config.outputs()["fallback"])
             self.assertEqual("partition", config.outputs()["service_name"])
             self.assertTrue(any("legacy Java inference" in warning for warning in config.warnings))
+
+    def test_legacy_java_inference_remains_recursive(self):
+        directory, root = _repository(markers=["modules/provider/azure/pom.xml"])
+        with directory:
+            outputs = descriptor.resolve(root, service_name="deep-java-service").outputs()
+
+            self.assertEqual("java", outputs["build_lane"])
+            self.assertEqual("java-inference", outputs["fallback"])
 
     def test_missing_descriptor_and_no_markers_selects_no_lane(self):
         directory, root = _repository()
