@@ -42,7 +42,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import descriptor as descriptor_module  # noqa: E402  (path set above for standalone use)
 
 
-SUPPORTED_PYTHON_VERSIONS = ("3.11", "3.12", "3.13")
+CANONICAL_PYTHON_RUNTIME = "3.12"
+_CANONICAL_RUNTIME_PARTS = (3, 12)
 DEFAULT_TEST_EXTRA = "dev"
 DEFAULT_RUNTIME_EXTRA = "az"
 EXCLUDED_PACKAGE_DIRS = frozenset(
@@ -106,19 +107,78 @@ def detect_archetype(root: Path) -> Tuple[str, List[str]]:
     )
 
 
-def _detect_python_runtime(root: Path) -> Optional[str]:
+def _requires_python_allows_canonical_runtime(specifier: str) -> bool:
+    """Evaluate the common major/minor-only PEP 440 subset used by OSDU services.
+
+    The descriptor selects a runtime *line*, not a patch release. Patch-specific
+    or otherwise unfamiliar constraints halt generation rather than guessing.
+    """
+
+    for raw_clause in specifier.split(","):
+        clause = raw_clause.strip()
+        match = re.fullmatch(
+            r"(~=|==|!=|<=|>=|<|>)\s*(\d+)(?:\.(\d+))?(?:\.(\d+|\*))?",
+            clause,
+        )
+        if not match:
+            raise DetectionError(
+                f"Cannot safely evaluate requires-python '{specifier}' against "
+                f"the canonical Python {CANONICAL_PYTHON_RUNTIME} runtime.",
+                "Use a major/minor-only Python version constraint, or wait until the "
+                "required runtime is supported by the python-uv-fastapi archetype.",
+            )
+
+        operator, major, minor, patch = match.groups()
+        if minor is None or (patch is not None and patch != "*"):
+            raise DetectionError(
+                f"requires-python '{specifier}' is more specific than the descriptor's "
+                f"Python {CANONICAL_PYTHON_RUNTIME} runtime line.",
+                "Use a major/minor-only Python version constraint, or wait until the "
+                "required runtime is supported by the python-uv-fastapi archetype.",
+            )
+
+        required = (int(major), int(minor))
+        runtime = _CANONICAL_RUNTIME_PARTS
+        wildcard = patch == "*"
+        if wildcard and operator not in {"==", "!="}:
+            raise DetectionError(
+                f"Cannot safely evaluate requires-python '{specifier}' against "
+                f"the canonical Python {CANONICAL_PYTHON_RUNTIME} runtime.",
+                "Use a standard major/minor Python version constraint.",
+            )
+
+        matches = {
+            ">=": runtime >= required,
+            ">": runtime > required,
+            "<=": runtime <= required,
+            "<": runtime < required,
+            "==": runtime == required,
+            "!=": runtime != required,
+            "~=": runtime >= required and runtime[0] == required[0],
+        }[operator]
+        if not matches:
+            return False
+    return True
+
+
+def _detect_python_runtime(root: Path) -> str:
     try:
         text = (root / "pyproject.toml").read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
+        return CANONICAL_PYTHON_RUNTIME
     match = re.search(r"^\s*requires-python\s*=\s*[\"']([^\"']+)[\"']", text, re.MULTILINE)
     if not match:
-        return None
-    versions = re.findall(r"3\.\d+", match.group(1))
-    for version in versions:
-        if version in SUPPORTED_PYTHON_VERSIONS:
-            return version
-    return None
+        return CANONICAL_PYTHON_RUNTIME
+    specifier = match.group(1)
+    if not _requires_python_allows_canonical_runtime(specifier):
+        raise DetectionError(
+            f"requires-python '{specifier}' excludes the canonical "
+            f"Python {CANONICAL_PYTHON_RUNTIME} runtime.",
+            f"The python-uv-fastapi archetype currently requires Python "
+            f"{CANONICAL_PYTHON_RUNTIME}; update the service constraint or wait for "
+            "a new canonical runtime.",
+        )
+    return CANONICAL_PYTHON_RUNTIME
 
 
 def _detect_python_distribution(root: Path) -> Optional[str]:
@@ -260,8 +320,7 @@ def render_descriptor(archetype: str, service_name: str, root: Path, app_module:
             app_module, _ = detect_app_module(root)
         lines.extend(["", "build:", "  python:", "    packageManager: uv", "    lockfile: uv.lock"])
         runtime = _detect_python_runtime(root)
-        if runtime:
-            lines.append(f'    runtimeVersion: "{runtime}"')
+        lines.append(f'    runtimeVersion: "{runtime}"')
         distribution = _detect_python_distribution(root)
         if distribution:
             lines.append(f"    distribution: {distribution}")
@@ -315,15 +374,21 @@ def main(argv=None) -> int:
     if args.check:
         return 0
 
+    try:
+        rendered = render_descriptor(archetype, service_name, root, app_module)
+    except DetectionError as error:
+        print(f"::error::Service descriptor generation halted: {error}")
+        print(f"::error::{error.remediation}")
+        return 2
+
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        render_descriptor(archetype, service_name, root, app_module), encoding="utf-8"
-    )
+    target.write_text(rendered, encoding="utf-8")
 
     config = descriptor_module.resolve(root, service_name=service_name)
     if not config.valid:
         for error in config.errors:
             print(f"::error::Generated descriptor failed validation: {error.render()}")
+        target.unlink(missing_ok=True)
         return 2
 
     print(f"✅ Generated {descriptor_module.DESCRIPTOR_PATH} (archetype: {archetype}, service: {service_name})")

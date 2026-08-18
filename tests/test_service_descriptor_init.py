@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).parents[1]
@@ -25,6 +26,10 @@ def _load_module(name: str, relative_path: str):
 
 
 descriptor = _load_module("descriptor_for_init", ".github/scripts/service-config/descriptor.py")
+generator = _load_module(
+    "generate_descriptor_for_init",
+    ".github/scripts/service-config/generate_descriptor.py",
+)
 codeowners = _load_module(
     "generate_codeowners", ".github/scripts/service-config/generate_codeowners.py"
 )
@@ -99,6 +104,65 @@ class DescriptorGenerationTests(unittest.TestCase):
             self.assertTrue(config.valid, [error.render() for error in config.errors])
             self.assertEqual("python", config.outputs()["build_lane"])
             self.assertEqual("wdmsworker.app:app", config.outputs()["app_module"])
+
+    def test_python_generation_selects_the_canonical_runtime_when_compatible(self):
+        directory, root = _repository(
+            {
+                "pyproject.toml": (
+                    '[project]\nname = "demo"\nrequires-python = ">=3.11,<3.14"\n'
+                ),
+                "uv.lock": "version = 1\n",
+                "src/demo/__init__.py": "",
+                "src/demo/app.py": "app = object()\n",
+            }
+        )
+        with directory:
+            result = _run("generate_descriptor.py", "--root", str(root))
+
+            self.assertEqual(0, result.returncode, result.stdout)
+            generated = (root / ".spi" / "service.yaml").read_text(encoding="utf-8")
+            self.assertIn('runtimeVersion: "3.12"', generated)
+            self.assertNotIn('runtimeVersion: "3.11"', generated)
+
+    def test_python_generation_halts_when_the_canonical_runtime_is_excluded(self):
+        directory, root = _repository(
+            {
+                "pyproject.toml": '[project]\nname = "demo"\nrequires-python = ">=3.13"\n',
+                "uv.lock": "version = 1\n",
+                "src/demo/__init__.py": "",
+                "src/demo/app.py": "app = object()\n",
+            }
+        )
+        with directory:
+            first = _run("generate_descriptor.py", "--root", str(root))
+            second = _run("generate_descriptor.py", "--root", str(root))
+
+            self.assertEqual(2, first.returncode)
+            self.assertEqual(2, second.returncode)
+            self.assertIn("excludes the canonical Python 3.12 runtime", first.stdout)
+            self.assertFalse((root / ".spi" / "service.yaml").exists())
+
+    def test_generated_descriptor_is_removed_when_post_write_validation_fails(self):
+        directory, root = _repository({"pom.xml": "<project/>"})
+        invalid = generator.descriptor_module.ResolvedConfig(
+            valid=False,
+            errors=[
+                generator.descriptor_module.ValidationError(
+                    path="service.archetype",
+                    code="invalid",
+                    message="synthetic validation failure",
+                )
+            ],
+        )
+        with directory, mock.patch.object(
+            generator.descriptor_module, "resolve", return_value=invalid
+        ):
+            result = generator.main(
+                ["--root", str(root), "--service-name", "partition"]
+            )
+
+            self.assertEqual(2, result)
+            self.assertFalse((root / ".spi" / "service.yaml").exists())
 
     def test_python_generation_halts_when_the_application_module_is_unclear(self):
         base = {
