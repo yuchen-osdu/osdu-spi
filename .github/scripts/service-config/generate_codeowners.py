@@ -73,7 +73,8 @@ def has_active_rule(text: str) -> bool:
             continue
         tokens = content.split()
         if tokens[0] == "/.spi/" and len(tokens) > 1:
-            return all(_valid_owner(owner) for owner in tokens[1:])
+            if all(_valid_owner(owner) for owner in tokens[1:]):
+                return True
     return False
 
 

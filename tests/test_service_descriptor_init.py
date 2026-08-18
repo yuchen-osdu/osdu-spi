@@ -366,6 +366,11 @@ class CodeownersSeedingTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 self.assertFalse(codeowners.has_active_rule(rule))
 
+    def test_later_valid_owner_rule_is_not_masked_by_an_earlier_malformed_rule(self):
+        content = "/.spi/ @owner-\n/.spi/ @my-org/engineering-system\n"
+
+        self.assertTrue(codeowners.has_active_rule(content))
+
     def test_placeholder_remediation_matches_the_read_only_settings_workflow(self):
         content = codeowners.render_block([])
 
