@@ -599,21 +599,14 @@ jobs:
 
   docker-push:
     name: "📤 Build & Publish Container Image"
-    needs: [read-service-config, java-build, python-compatibility, docker-build]
+    needs: [read-service-config, docker-build]
     # §5.5 trust boundary (ADR-036): push to GHCR only on trusted events. The force_full_pipeline
     # arm is declared by W13 (#19); until then it evaluates null and is harmless.
     # `!cancelled()` only compensates for the skipped sibling language lane, so the build-success
-    # requirement that GitHub previously applied implicitly to *both* arms is now written out
-    # ahead of the (unchanged) trust clause.
+    # requirement is represented by the successful read-only container validation. That job
+    # directly verifies the selected Java/Python lane before this credentialed solve begins.
     if: |
       !cancelled() &&
-      (
-        (needs.java-build.result == 'success' && needs.java-build.outputs.build_result == 'success') ||
-        (
-          needs.read-service-config.outputs.build_lane == 'python' &&
-          needs.python-compatibility.result == 'success'
-        )
-      ) &&
       needs.docker-build.result == 'success' &&
       (
         (

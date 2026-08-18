@@ -323,8 +323,9 @@ class ServiceConfigPreludeTests(unittest.TestCase):
                 self.assertIn("artifact_suffix: ${{ matrix.artifact_suffix }}", job)
 
         required = _job_block(_read(VALIDATE), "docker-build-required")
-        self.assertIn("docker-build", required)
-        self.assertIn("docker-push", required)
+        required_needs = required.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("docker-build", required_needs)
+        self.assertNotIn("docker-push", required_needs)
 
     def test_no_obsolete_python_integration_point_remains(self):
         for workflow in (VALIDATE, BUILD):
@@ -364,24 +365,26 @@ class DockerLaneSelectionTests(unittest.TestCase):
     def test_docker_jobs_run_for_either_lane_without_breaking_the_java_gate(self):
         text = _read(VALIDATE)
 
-        for job in ("docker-build", "docker-push"):
-            with self.subTest(job=job):
-                block = _job_block(text, job)
-                # Python compatibility follows the canonical Python build, so the
-                # language graph has two lane endpoints before container handling.
-                self.assertIn("!cancelled()", block)
-                self.assertIn(
-                    "needs.java-build.result == 'success' && needs.java-build.outputs.build_result == 'success'",
-                    block,
-                )
-                self.assertIn(
-                    "needs.python-compatibility.result == 'success'",
-                    block,
-                )
-                needs = block.split("needs:", 1)[1].split("if:", 1)[0]
-                self.assertIn("java-build", needs)
-                self.assertIn("python-compatibility", needs)
-                self.assertNotIn("python-build", needs)
+        validation = _job_block(text, "docker-build")
+        # Python compatibility follows the canonical Python build, so the
+        # language graph has two lane endpoints before container handling.
+        self.assertIn("!cancelled()", validation)
+        self.assertIn(
+            "needs.java-build.result == 'success' && needs.java-build.outputs.build_result == 'success'",
+            validation,
+        )
+        self.assertIn("needs.python-compatibility.result == 'success'", validation)
+        validation_needs = validation.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("java-build", validation_needs)
+        self.assertIn("python-compatibility", validation_needs)
+        self.assertNotIn("python-build", validation_needs)
+
+        publish = _job_block(text, "docker-push")
+        publish_needs = publish.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("docker-build", publish_needs)
+        self.assertNotIn("java-build", publish_needs)
+        self.assertNotIn("python-build", publish_needs)
+        self.assertNotIn("python-compatibility", publish_needs)
 
     def test_read_only_validation_precedes_credentialed_publication(self):
         validate = _job_block(_read(VALIDATE), "docker-build")
@@ -391,7 +394,8 @@ class DockerLaneSelectionTests(unittest.TestCase):
         self.assertNotRegex(validate, r"(?m)^\s+packages:\s+write")
         self.assertIn("packages: write", publish)
         self.assertIn("needs.docker-build.result == 'success'", publish)
-        self.assertIn("docker-build", publish.split("if:", 1)[0])
+        publish_needs = publish.split("needs:", 1)[1].split("if:", 1)[0]
+        self.assertIn("docker-build", publish_needs)
         self.assertIn("push: 'false'", validate)
         self.assertIn("push: 'true'", publish)
         self.assertIn('name: "📦 Container Image Validation"', validate)
@@ -415,10 +419,7 @@ class DockerLaneSelectionTests(unittest.TestCase):
             condition.index("needs.docker-build.result == 'success'"),
             condition.index("inputs.force_full_pipeline == true"),
         )
-        self.assertLess(
-            condition.index("needs.java-build.outputs.build_result == 'success'"),
-            condition.index("github.actor != 'dependabot[bot]'"),
-        )
+        self.assertNotIn("needs.java-build", condition)
 
     def test_deploy_and_integration_tests_remain_java_only(self):
         text = _read(VALIDATE)

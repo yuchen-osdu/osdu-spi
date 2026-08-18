@@ -44,7 +44,21 @@ if: |
   )
 ```
 
-**Why the compact clause is sufficient.** This is equivalent to the longer form in design §5.5 that also checks `needs.check-initialization.outputs.initialized == 'true'` and the build-lane gate (`needs.check-repo-state.outputs.is_java_repo == 'true'` before ADR-039; `needs.read-service-config.outputs.build_lane == 'java'` since): these jobs `needs: [java-build]`, and `java-build` only emits `build_result == 'success'` when both upstream guards already held — so they are implied, not weakened. The clause is replicated verbatim on `deploy` and `integration-test` as **defense-in-depth**, rather than relying solely on skip-propagation from `docker-push`. The `workflow_dispatch && force_full_pipeline` half is the W13 operator escape hatch — the only way to force a full run when `paths-ignore` would otherwise skip a template-sync change. The `github.event_name != 'workflow_dispatch'` guard in the first half is load-bearing: without it a plain `workflow_dispatch` (e.g. the routine post-init validation run) satisfies the first half and pushes credential-bearing jobs without the `force_full_pipeline` opt-in. None of the four event guards may be dropped; dropping one is the only way to turn this into a credential-exposure path.
+**Why the dependency chain is sufficient.** The selected language gate is
+centralized in the read-only `Container Image Validation` job: it directly needs
+the Java lane endpoint and the Python compatibility endpoint, and runs only when
+the selected endpoint succeeded. `Build & Publish` directly requires that
+validation result; deploy requires publication; integration requires deploy.
+This produces a legible graph without weakening build provenance.
+
+The **credential trust predicates remain replicated directly** on publication,
+deploy and integration as defense in depth. They do not rely on skip propagation
+from an upstream credentialed job. The `workflow_dispatch &&
+force_full_pipeline` half is the W13 operator escape hatch, the only way to force
+a full run when `paths-ignore` would otherwise skip a template-sync change. The
+`github.event_name != 'workflow_dispatch'` guard in the first half is
+load-bearing: without it, a plain dispatch could push credential-bearing jobs
+without operator opt-in. None of the event guards may be dropped.
 
 ## Consequences
 
