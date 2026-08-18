@@ -169,6 +169,11 @@ class ActionContractTests(unittest.TestCase):
         ):
             self.assertIn(report, tests_phase)
 
+    def test_service_formatting_excludes_synced_engineering_tooling(self):
+        quality = _read(ACTION_DIR / "phases" / "quality.sh")
+
+        self.assertIn('ruff format --check --exclude ".github"', quality)
+
     def test_action_scripts_never_evaluate_caller_input(self):
         for script in sorted(ACTION_DIR.rglob("*.sh")):
             code = [

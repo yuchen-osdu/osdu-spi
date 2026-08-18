@@ -58,7 +58,10 @@ run_ruff() {
   spi_group_end
 
   spi_group_start "ruff format --check ${FORMAT_CHECK_PATHS:-.}"
-  if ! "${UV_RUN[@]}" ruff format --check "${FORMAT_ARGS[@]}"; then
+  # `.github/**` is injected by the engineering system after upstream CI was
+  # authored. Service-owned Ruff policy must not start formatting synced action
+  # implementations merely because the upstream project checks repository root.
+  if ! "${UV_RUN[@]}" ruff format --check --exclude ".github" "${FORMAT_ARGS[@]}"; then
     status=1
   fi
   spi_group_end

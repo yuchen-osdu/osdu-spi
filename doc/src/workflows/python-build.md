@@ -49,6 +49,8 @@ when an earlier one fails, so a single CI run reports every problem:
    The exported-requirements comparison runs **only** when the repository supplies its
    own regeneration script (`lock_regeneration_script`).
 3. **quality** — `ruff check`, `ruff format --check`, `mypy`.
+   The format check excludes `.github/**`: those files are engineering-system
+   tooling injected after upstream service lint policy was authored.
 4. **tests** — unit, service in-process, and service subprocess pytest suites.
 5. **package** — optional `uv build` packaging validation.
 6. **runtime-extras** — `uv sync --locked --no-dev` plus the runtime extras, then an
