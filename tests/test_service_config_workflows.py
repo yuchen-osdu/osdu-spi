@@ -407,11 +407,27 @@ class DockerLaneSelectionTests(unittest.TestCase):
             with self.subTest(job=job):
                 block = _job_block(text, job)
                 self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
+                self.assertIn("needs.java-build.result == 'success'", block)
                 self.assertIn("needs.java-build.outputs.build_result == 'success'", block)
+                self.assertIn("needs.docker-push.result == 'success'", block)
                 self.assertNotIn("python-build", block)
-                # No status function: a skipped java-build keeps the deploy lane skipped.
-                self.assertNotIn("!cancelled()", block)
+                # Static Python jobs are skipped for Java services. A status function
+                # prevents those transitive skips from suppressing deploy, while the
+                # explicit result predicates above keep failures closed.
+                self.assertIn("!cancelled()", block)
                 self.assertNotIn("always()", block)
+        integration = _job_block(text, "integration-test")
+        self.assertIn("needs.deploy.result == 'success'", integration)
+
+    def test_java_deploy_gate_is_not_suppressed_by_skipped_python_siblings(self):
+        text = _read(VALIDATE)
+
+        for job in ("deploy", "integration-test"):
+            with self.subTest(job=job):
+                condition = _job_block(text, job).split("if: |", 1)[1].split("runs-on:", 1)[0]
+                self.assertIn("!cancelled()", condition)
+                self.assertNotIn("needs.python-build", condition)
+                self.assertNotIn("needs.python-compatibility", condition)
 
     def test_required_summary_aggregates_the_python_lane(self):
         summary = _read(VALIDATE).split("docker-build-required:", 1)[1]
