@@ -183,6 +183,14 @@ class TemplateBuildOwnershipTests(unittest.TestCase):
             <= files
         )
 
+    def test_template_sync_force_adds_exact_configured_files(self):
+        workflow = _read(ROOT / ".github" / "template-workflows" / "sync-template.yml")
+        individual_files = workflow.split("# Sync individual files", 1)[1].split(
+            "# Process template workflows", 1
+        )[0]
+
+        self.assertIn('git add -f "$file"', individual_files)
+
 
 class ServiceConfigPreludeTests(unittest.TestCase):
     def test_validate_publishes_the_fixed_output_contract(self):
