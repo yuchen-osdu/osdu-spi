@@ -148,7 +148,9 @@ class ActionContractTests(unittest.TestCase):
         drift = _read(ACTION_DIR / "phases" / "lock-drift.sh")
 
         self.assertIn("uv sync --locked", phases)
-        self.assertIn("uv sync --locked --no-dev", runtime)
+        self.assertIn("uv sync --locked --no-dev --no-editable", runtime)
+        self.assertIn("uv run --no-sync python", runtime)
+        self.assertNotIn('uv run --frozen --no-dev "${EXTRA_ARGS[@]}"', runtime)
         self.assertIn("uv lock --locked", drift)
 
     def test_export_drift_requires_a_repository_supplied_script(self):
