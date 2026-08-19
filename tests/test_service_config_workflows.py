@@ -154,6 +154,15 @@ class ChangedPathFilterTests(unittest.TestCase):
             self.assertNotIn(".spi", block)
 
 
+class CodeQLToolingTests(unittest.TestCase):
+    def test_javascript_analysis_does_not_require_an_npm_lockfile(self):
+        analyze = _job_block(_read(CODEQL), "analyze")
+        node = analyze.split("- name: Setup Node.js", 1)[1].split("- name:", 1)[0]
+
+        self.assertIn("node-version: '18'", node)
+        self.assertNotIn("cache:", node)
+
+
 class ServiceConfigPreludeTests(unittest.TestCase):
     def test_validate_publishes_the_fixed_output_contract(self):
         text = _read(VALIDATE)
