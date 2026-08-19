@@ -158,6 +158,25 @@ jobs:
           fi
           echo "VARIABLES_SUCCESS=$VARIABLES_SUCCESS" >> $GITHUB_ENV
 
+      - name: Prepare explicitly filtered upstream history
+        id: filtered_upstream
+        if: vars.UPSTREAM_HISTORY_EXCLUDE_PATHS != ''
+        env:
+          EXCLUDE_PATHS: ${{ vars.UPSTREAM_HISTORY_EXCLUDE_PATHS }}
+          REPO_URL: ${{ env.REPO_URL }}
+        run: |
+          python -m venv "$RUNNER_TEMP/history-filter-venv"
+          "$RUNNER_TEMP/history-filter-venv/bin/python" -m pip install \
+            --disable-pip-version-check git-filter-repo==2.47.0
+          printf '%s\n' "$EXCLUDE_PATHS" > "$RUNNER_TEMP/upstream-history-exclude-paths.txt"
+          PATH="$RUNNER_TEMP/history-filter-venv/bin:$PATH" \
+          "$RUNNER_TEMP/history-filter-venv/bin/python" .github/scripts/filter_upstream_history.py \
+            --source-url "$REPO_URL" \
+            --branch "$DEFAULT_BRANCH" \
+            --output-dir "$RUNNER_TEMP/filtered-upstream" \
+            --exclude-paths-file "$RUNNER_TEMP/upstream-history-exclude-paths.txt"
+          echo "FILTERED_UPSTREAM_DIR=$RUNNER_TEMP/filtered-upstream" >> "$GITHUB_ENV"
+
       - name: Branch Structure
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Standard token: Used for git operations only
@@ -171,8 +190,15 @@ jobs:
             fi
           fi
           
-          # Create fork_upstream from upstream's default branch
-          git checkout -b fork_upstream upstream/$DEFAULT_BRANCH
+          # Create fork_upstream from the raw upstream branch, or from the
+          # explicit deterministic history filter prepared above.
+          if [ -n "${FILTERED_UPSTREAM_DIR:-}" ]; then
+            git remote add filtered-upstream "$FILTERED_UPSTREAM_DIR"
+            git fetch filtered-upstream "$DEFAULT_BRANCH"
+            git checkout -b fork_upstream "filtered-upstream/$DEFAULT_BRANCH"
+          else
+            git checkout -b fork_upstream "upstream/$DEFAULT_BRANCH"
+          fi
           
           # Try to push with error handling for push protection
           echo "::notice::Pushing fork_upstream branch..."
@@ -191,6 +217,11 @@ jobs:
             echo "::notice::Successfully pushed fork_upstream branch"
             echo "PUSH_EXIT_CODE=0" >> $GITHUB_ENV
           fi
+
+          # Local actions disappear when the worktree switches to upstream.
+          # Restore the failure handler before the next workflow step, even
+          # when the push failed and initialization is about to stop.
+          git checkout main -- .github/local-actions/secret-push-handler
 
       - name: Handle fork_upstream push protection
         if: env.PUSH_EXIT_CODE != '0'

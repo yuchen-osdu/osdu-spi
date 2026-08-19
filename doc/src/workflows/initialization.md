@@ -103,6 +103,7 @@ The initialization process produces clear outcomes to guide your next steps:
 | Secret | Purpose | Required |
 |--------|---------|----------|
 | `UPSTREAM_REPO_URL` | Repository to sync from | ✅ Yes |
+| `UPSTREAM_HISTORY_EXCLUDE_PATHS` | Newline-separated upstream paths to remove from imported Git history | No |
 | `GITHUB_TOKEN` | Automatically provided | ✅ Yes |
 | `AZURE_API_KEY` | AI-enhanced PR descriptions | ❌ Optional |
 | `AZURE_API_BASE` | Azure Foundry endpoint | ❌ Optional |
@@ -124,6 +125,20 @@ The initialization process produces clear outcomes to guide your next steps:
 - [ ] **Three branches exist** - `main`, `fork_upstream`, `fork_integration`
 - [ ] **Workflows active** - All 5 workflows visible in Actions tab
 - [ ] **Secrets configured** - At minimum `UPSTREAM_REPO_URL` is set
+
+### Upstream history that GitHub cannot store
+
+GitHub rejects branches whose reachable history contains a blob larger than
+100 MB, even when the current upstream tree has deleted that file. For this
+exceptional case, a repository administrator may set
+`UPSTREAM_HISTORY_EXCLUDE_PATHS` to a newline-separated list of exact,
+repository-relative paths before re-running initialization.
+
+The filter is explicit and deterministic. Initialization and every later
+upstream sync apply the same path removal before merging, so the filtered
+`fork_upstream` history remains stable. The workflow never discovers and
+drops paths automatically. Review each configured exclusion as a permanent
+fork-boundary decision.
 - [ ] **Protection enabled** - `main` branch requires PR reviews
 - [ ] **Initial sync works** - Manual upstream sync runs successfully
 - [ ] **Team permissions** - Team has appropriate repository access
