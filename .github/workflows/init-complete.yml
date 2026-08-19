@@ -259,7 +259,17 @@ jobs:
           # Push fork_integration with error handling
           echo "::notice::Pushing fork_integration branch..."
           set +e
-          git push -u origin fork_integration 2>&1 | tee push_integration_output.txt
+          REMOTE_INTEGRATION_SHA=$(git ls-remote --heads origin fork_integration | awk '{print $1}')
+          if [ -n "$REMOTE_INTEGRATION_SHA" ]; then
+            # Descriptor remediation is intentionally a rerunnable workflow.
+            # Guard the required replacement with the exact remote SHA seen
+            # above, so concurrent human or workflow changes are never lost.
+            git push -u \
+              --force-with-lease="refs/heads/fork_integration:$REMOTE_INTEGRATION_SHA" \
+              origin fork_integration 2>&1 | tee push_integration_output.txt
+          else
+            git push -u origin fork_integration 2>&1 | tee push_integration_output.txt
+          fi
           PUSH_INTEGRATION_EXIT_CODE=${PIPESTATUS[0]}
           set -e
 
