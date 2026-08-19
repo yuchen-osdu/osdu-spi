@@ -101,6 +101,18 @@ class WorkflowWiringTests(unittest.TestCase):
         self.assertIn(restore, init)
         self.assertLess(init.index(restore), init.index(handler))
 
+    def test_descriptor_remediation_retry_updates_integration_with_a_lease(self):
+        init = (ROOT / ".github" / "workflows" / "init-complete.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("git ls-remote --heads origin fork_integration", init)
+        self.assertIn(
+            '--force-with-lease="refs/heads/fork_integration:$REMOTE_INTEGRATION_SHA"',
+            init,
+        )
+        self.assertNotIn("git push -f origin fork_integration", init)
+
 
 if __name__ == "__main__":
     unittest.main()
