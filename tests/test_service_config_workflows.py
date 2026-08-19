@@ -163,6 +163,27 @@ class CodeQLToolingTests(unittest.TestCase):
         self.assertNotIn("cache:", node)
 
 
+class TemplateBuildOwnershipTests(unittest.TestCase):
+    def test_template_sync_owns_canonical_build_files_not_the_directory(self):
+        config = json.loads(_read(SYNC_CONFIG))
+        directories = {
+            entry["path"] for entry in config["sync_rules"]["directories"]
+        }
+        files = {entry["path"] for entry in config["sync_rules"]["files"]}
+
+        self.assertNotIn("build", directories)
+        self.assertTrue(
+            {
+                "build/Dockerfile",
+                "build/docker-entrypoint.sh",
+                "build/python/Dockerfile",
+                "build/python/Dockerfile.dockerignore",
+                "build/python/docker-entrypoint.sh",
+            }
+            <= files
+        )
+
+
 class ServiceConfigPreludeTests(unittest.TestCase):
     def test_validate_publishes_the_fixed_output_contract(self):
         text = _read(VALIDATE)
