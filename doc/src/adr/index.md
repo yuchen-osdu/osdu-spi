@@ -75,6 +75,7 @@ Build architecture, dependency management, and documentation:
 | [026](026-dependabot-security-update-strategy.md) | **Dependabot Security Updates** | :material-minus: Medium |
 | [027](027-documentation-generation-strategy.md) | **Documentation Generation** | :material-minus: Medium |
 | [039](039-fork-owned-service-descriptor.md) | **Fork-Owned Service Descriptor** | :material-trending-up: High |
+| [040](040-canonical-build-files-not-directory.md) | **Sync Canonical Build Files Without Owning the Directory** | :material-trending-up: High |
 
 ### :material-rocket-launch: CI/CD & Deployment
 
