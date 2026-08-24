@@ -38,7 +38,7 @@ class RunnerInputValidationTests(unittest.TestCase):
                 root,
                 test_type="maven",
                 test_dir="acceptance",
-                pytest_runner="",
+                python_runner="",
                 python_version="",
                 uv_version="",
                 python_test_extras="",
@@ -54,7 +54,7 @@ class RunnerInputValidationTests(unittest.TestCase):
                     root,
                     test_type="maven",
                     test_dir=str(external),
-                    pytest_runner="",
+                    python_runner="",
                     python_version="",
                     uv_version="",
                     python_test_extras="",
@@ -62,7 +62,7 @@ class RunnerInputValidationTests(unittest.TestCase):
             finally:
                 external.rmdir()
 
-    def test_accepts_a_locked_pytest_runner_contract(self):
+    def test_accepts_a_locked_python_runner_contract(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tests" / "acceptance").mkdir(parents=True)
@@ -73,9 +73,9 @@ class RunnerInputValidationTests(unittest.TestCase):
 
             validator.validate(
                 root,
-                test_type="pytest",
+                test_type="python",
                 test_dir="tests/acceptance",
-                pytest_runner=".spi/run_acceptance.py",
+                python_runner=".spi/run_acceptance.py",
                 python_version="3.12",
                 uv_version="0.12.5",
                 python_test_extras="dev,az",
@@ -89,11 +89,11 @@ class RunnerInputValidationTests(unittest.TestCase):
             (root / "runner.py").write_text("print('ok')\n", encoding="utf-8")
 
             cases = (
-                {"test_dir": "../tests", "pytest_runner": "runner.sh", "extras": "dev"},
-                {"test_dir": "tests", "pytest_runner": "runner.sh", "extras": "dev"},
+                {"test_dir": "../tests", "python_runner": "runner.sh", "extras": "dev"},
+                {"test_dir": "tests", "python_runner": "runner.sh", "extras": "dev"},
                 {
                     "test_dir": "tests",
-                    "pytest_runner": "runner.py",
+                    "python_runner": "runner.py",
                     "extras": "dev,$(id)",
                 },
             )
@@ -101,15 +101,15 @@ class RunnerInputValidationTests(unittest.TestCase):
                 with self.subTest(case=case), self.assertRaises(ValueError):
                     validator.validate(
                         root,
-                        test_type="pytest",
+                        test_type="python",
                         test_dir=case["test_dir"],
-                        pytest_runner=case["pytest_runner"],
+                        python_runner=case["python_runner"],
                         python_version="3.12",
                         uv_version="0.12.5",
                         python_test_extras=case["extras"],
                     )
 
-    def test_rejects_a_pytest_runner_symlink_that_escapes_the_repository(self):
+    def test_rejects_a_python_runner_symlink_that_escapes_the_repository(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "tests").mkdir()
@@ -124,9 +124,9 @@ class RunnerInputValidationTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     validator.validate(
                         root,
-                        test_type="pytest",
+                        test_type="python",
                         test_dir="tests",
-                        pytest_runner="runner.py",
+                        python_runner="runner.py",
                         python_version="3.12",
                         uv_version="0.12.5",
                         python_test_extras="dev",
@@ -137,11 +137,11 @@ class RunnerInputValidationTests(unittest.TestCase):
 
 
 class IntegrationActionContractTests(unittest.TestCase):
-    def test_pytest_environment_is_locked_before_azure_login(self):
+    def test_python_environment_is_locked_before_azure_login(self):
         action = ACTION.read_text(encoding="utf-8")
 
         self.assertLess(
-            action.index("Install locked pytest acceptance environment"),
+            action.index("Install locked Python acceptance environment"),
             action.index("Azure login (OIDC)"),
         )
         self.assertIn("args=(sync --locked)", action)
@@ -153,11 +153,13 @@ class IntegrationActionContractTests(unittest.TestCase):
         self.assertIn("test_type:", action)
         self.assertIn('case "$TEST_TYPE" in', action)
         self.assertIn("maven)", action)
-        self.assertIn("pytest)", action)
+        self.assertIn("python)", action)
         self.assertIn('mvn "$@"', action)
+        self.assertIn('TEST_REPO_ROOT="$GITHUB_WORKSPACE"', action)
+        self.assertIn('TEST_RESULTS_DIR="$report_dir"', action)
         self.assertNotIn("eval ", action)
 
-    def test_pytest_junit_is_uploaded_with_maven_reports(self):
+    def test_python_runner_junit_is_uploaded_with_maven_reports(self):
         action = ACTION.read_text(encoding="utf-8")
 
         self.assertIn(

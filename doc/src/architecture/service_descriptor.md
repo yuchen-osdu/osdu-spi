@@ -48,9 +48,9 @@ tests:
     type: pytest
     path: tests/service
   acceptance:
-    type: pytest
-    path: tests/acceptance
-    runnerPath: .spi/run_acceptance.py
+    type: python
+    path: .
+    runnerPath: tests/run_acceptance.py
 
 container:
   appModule: wdmsworker.app:app
@@ -88,7 +88,8 @@ rejected by the validator. Those values stay in repository/environment variables
 Python live tests add two non-privileged fields: `tests.acceptance.path` is the working directory,
 and `tests.acceptance.runnerPath` is a repository-relative `.py` file. The integration action
 validates both paths, installs the committed uv lock before Azure login, and invokes the runner as
-an argv element with one fixed `--junit-xml` argument. The descriptor still cannot provide shell,
+an argv element with `TEST_REPO_ROOT` and `TEST_RESULTS_DIR`. The runner owns its test commands and
+writes JUnit XML beneath the results directory. The descriptor still cannot provide shell,
 arguments, environment variables, identities or deployment targets.
 
 ## How the workflows use it
@@ -118,7 +119,7 @@ descriptor is invalid, when it declares an archetype whose lane is not installed
 template version, or when the selected lane did not actually build.
 
 Deployment is shared because both lanes publish an immutable OCI digest. The integration action
-keeps the current Maven path for Java and selects its closed pytest runner mode for Python. A
+keeps the current Maven path for Java and selects its closed delegated-Python mode for Python. A
 Python repository is not deploy-ready until the acceptance path and runner exist; the workflow
 fails before Azure login or Deployment mutation when that contract is incomplete.
 

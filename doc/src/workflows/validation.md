@@ -30,7 +30,7 @@ are always treated as build-relevant, so a descriptor-only pull request runs the
 
 Deployment is language-neutral: Java and Python both pass the published immutable digest to the
 same `aks-deploy` action. Integration testing keeps the shared digest guard, health probes, token
-minting and Key Vault mapping, then selects Maven for Java or a descriptor-declared pytest runner
+minting and Key Vault mapping, then selects Maven for Java or a descriptor-declared Python runner
 for Python. The Python action installs `uv.lock` before Azure login and invokes the reviewed runner
 without shell evaluation.
 
@@ -127,7 +127,7 @@ The workflow runs these validation jobs:
 | **Container Image Validation** | Builds without registry credentials | Canonical Java or Python image, amd64 |
 | **Build & Publish Container Image** | Trusted release build and GHCR push | Java multi-arch or Python amd64 |
 | **Deploy to spi-stack** | Rolls out the published candidate | Shared Deployment patch by immutable digest |
-| **Integration Tests** | Exercises the live candidate | Maven for Java; locked pytest runner for Python |
+| **Integration Tests** | Exercises the live candidate | Maven for Java; locked delegated runner for Python |
 | **Code Validation** | Process compliance | Conventional commits, merge conflicts, branch status |
 
 ## Branch-Specific Rules

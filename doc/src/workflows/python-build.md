@@ -183,9 +183,9 @@ Python build and the selected image build, and a *present* Python descriptor can
 when both actually succeeded.
 
 The published Python digest now enters the same `aks-deploy` action as Java. Live testing keeps
-the common cluster, token, Key Vault and digest guards but selects `test_type=pytest`. The action
-performs a locked uv sync before Azure login, then invokes the descriptor's reviewed
-`tests.acceptance.runnerPath` with a fixed JUnit output argument.
+the common cluster, token, Key Vault and digest guards but selects `test_type=python`. The action
+performs a locked uv sync before Azure login, then invokes the descriptor's reviewed runner with
+`TEST_REPO_ROOT` and `TEST_RESULTS_DIR`; the runner writes its JUnit XML reports there.
 
 ## Canonical Python Dockerfile
 

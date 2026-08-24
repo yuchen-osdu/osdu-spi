@@ -59,7 +59,7 @@ if: |
   vars.AZURE_CLIENT_ID != '' &&
   ( <event-trust predicate above> )
 
-# Integration Tests (Maven or pytest runner)
+# Integration Tests (Maven or delegated Python runner)
 if: |
   !cancelled() &&
   needs.read-service-config.outputs.build_lane in ['java', 'python'] &&
