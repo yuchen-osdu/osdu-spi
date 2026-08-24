@@ -107,6 +107,22 @@ class JunitSummaryTests(unittest.TestCase):
         self.assertEqual("2m 5s", junit.format_duration(125))
         self.assertEqual("1h 1m 1s", junit.format_duration(3661))
 
+    def test_aggregates_pytest_reports_from_the_fixed_results_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report_dir = Path(directory) / ".spi-integration-results"
+            report_dir.mkdir()
+            (report_dir / "junit.xml").write_text(
+                '<testsuites tests="7" failures="0" errors="0" skipped="2" time="4.5"/>',
+                encoding="utf-8",
+            )
+
+            metrics = junit.collect_metrics(Path(directory))
+
+            self.assertEqual(7, metrics.tests)
+            self.assertEqual(2, metrics.skipped)
+            self.assertEqual(4.5, metrics.duration_seconds)
+            self.assertEqual(1, metrics.report_files)
+
     def test_uses_testsuites_aggregate_without_double_counting_children(self):
         with tempfile.TemporaryDirectory() as directory:
             report_dir = Path(directory) / "target" / "surefire-reports"

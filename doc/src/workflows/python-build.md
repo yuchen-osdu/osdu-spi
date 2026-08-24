@@ -182,8 +182,10 @@ The required `🐳 Docker Build` context is unchanged; its summary job now aggre
 Python build and the selected image build, and a *present* Python descriptor can only pass
 when both actually succeeded.
 
-Deploy and integration-test stay Java-only and are explicitly gated on
-`build_lane == 'java'`. The Python lane ends at a published GHCR image.
+The published Python digest now enters the same `aks-deploy` action as Java. Live testing keeps
+the common cluster, token, Key Vault and digest guards but selects `test_type=pytest`. The action
+performs a locked uv sync before Azure login, then invokes the descriptor's reviewed
+`tests.acceptance.runnerPath` with a fixed JUnit output argument.
 
 ## Canonical Python Dockerfile
 

@@ -47,6 +47,10 @@ tests:
   serviceSubprocess:
     type: pytest
     path: tests/service
+  acceptance:
+    type: pytest
+    path: tests/acceptance
+    runnerPath: .spi/run_acceptance.py
 
 container:
   appModule: wdmsworker.app:app
@@ -66,7 +70,7 @@ The full field list is the template-owned schema at
 | Archetype | Selected when | Build lane installed |
 | --- | --- | --- |
 | `java-maven-azure` | `pom.xml` is present at initialization | Yes — build, test, image, push, deploy, integration tests |
-| `python-uv-fastapi` | `pyproject.toml` and `uv.lock` are present | Yes — build, test, image, push (no deploy or integration tests) |
+| `python-uv-fastapi` | `pyproject.toml` and `uv.lock` are present | Yes — build, test, image, push, deploy, pytest integration tests |
 
 Anything else halts initialization with an actionable message instead of guessing a build lane. For
 a Python service the ASGI module is detected the same way: an unambiguous `src/<package>/app.py`
@@ -81,6 +85,12 @@ GitHub Environment, secrets, permissions, workflow or action references and arbi
 rejected by the validator. Those values stay in repository/environment variables written by
 `spi onboard` and in Stack-side configuration.
 
+Python live tests add two non-privileged fields: `tests.acceptance.path` is the working directory,
+and `tests.acceptance.runnerPath` is a repository-relative `.py` file. The integration action
+validates both paths, installs the committed uv lock before Azure login, and invokes the runner as
+an argv element with one fixed `--junit-xml` argument. The descriptor still cannot provide shell,
+arguments, environment variables, identities or deployment targets.
+
 ## How the workflows use it
 
 `build.yml` and `validate.yml` start with a `read-service-config` job that emits a fixed output set:
@@ -91,7 +101,8 @@ unit_test_type      has_coverage    build_lane    lane_implemented  fallback
 python_runtime_version  python_distribution  python_import_package
 python_compatibility_versions  python_compatibility_matrix
 python_test_extras  python_runtime_extras  python_unit_test_path
-python_service_in_process_test_path  python_service_subprocess_test_path  app_module
+python_service_in_process_test_path  python_service_subprocess_test_path
+python_acceptance_test_path  python_acceptance_runner_path  app_module
 ```
 
 `build_lane` selects the statically declared language job (`🔨 Java Build` or `🐍 Python Build`)
@@ -106,7 +117,10 @@ The required check keeps its exact context name, `🐳 Docker Build`, and fails 
 descriptor is invalid, when it declares an archetype whose lane is not installed in the fork's
 template version, or when the selected lane did not actually build.
 
-Deploy and integration testing remain Java-only and are gated on `build_lane == 'java'`.
+Deployment is shared because both lanes publish an immutable OCI digest. The integration action
+keeps the current Maven path for Java and selects its closed pytest runner mode for Python. A
+Python repository is not deploy-ready until the acceptance path and runner exist; the workflow
+fails before Azure login or Deployment mutation when that contract is incomplete.
 
 For `pull_request_target` runs the descriptor and its parser are restored from `origin/main`, so an
 untrusted branch can never influence a privileged run.

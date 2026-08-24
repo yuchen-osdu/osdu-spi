@@ -208,6 +208,8 @@ class ServiceConfigPreludeTests(unittest.TestCase):
             "build_lane:",
             "lane_implemented:",
             "fallback:",
+            "python_acceptance_test_path:",
+            "python_acceptance_runner_path:",
         ):
             self.assertIn(output, text)
         self.assertIn("read_service_config.py", text)
@@ -471,24 +473,33 @@ class DockerLaneSelectionTests(unittest.TestCase):
         )
         self.assertNotIn("needs.java-build", condition)
 
-    def test_deploy_and_integration_tests_remain_java_only(self):
+    def test_deploy_and_integration_tests_accept_both_image_lanes(self):
         text = _read(VALIDATE)
 
         for job in ("deploy", "integration-test"):
             with self.subTest(job=job):
                 block = _job_block(text, job)
                 self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
+                self.assertIn("needs.read-service-config.outputs.build_lane == 'python'", block)
                 self.assertIn("needs.docker-push.result == 'success'", block)
                 self.assertNotIn("python-build", block)
-                # Static Python jobs are skipped for Java services. A status function
-                # prevents those transitive skips from suppressing deploy, while the
-                # explicit result predicates above keep failures closed.
+                # Static sibling language jobs are skipped. A status function prevents
+                # those transitive skips from suppressing deploy, while the explicit
+                # image/deploy result predicates above keep failures closed.
                 self.assertIn("!cancelled()", block)
                 self.assertNotIn("always()", block)
         integration = _job_block(text, "integration-test")
         self.assertIn("needs.deploy.result == 'success'", integration)
+        self.assertIn(
+            "test_type: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'pytest' || 'maven' }}",
+            integration,
+        )
+        self.assertIn(
+            "if: needs.read-service-config.outputs.build_lane == 'java'",
+            integration,
+        )
 
-    def test_java_deploy_gate_is_not_suppressed_by_skipped_python_siblings(self):
+    def test_selected_deploy_gate_is_not_suppressed_by_skipped_language_siblings(self):
         text = _read(VALIDATE)
 
         for job in ("deploy", "integration-test"):
@@ -498,6 +509,27 @@ class DockerLaneSelectionTests(unittest.TestCase):
                 self.assertNotIn("needs.java-build", condition)
                 self.assertNotIn("needs.python-build", condition)
                 self.assertNotIn("needs.python-compatibility", condition)
+
+    def test_python_deploy_fails_before_login_without_live_acceptance_metadata(self):
+        deploy = _job_block(_read(VALIDATE), "deploy")
+        preflight = deploy.split(
+            '- name: "Validate Python live-acceptance contract"', 1
+        )[1].split("- name:", 1)[0]
+
+        self.assertIn(
+            "needs.read-service-config.outputs.python_acceptance_test_path",
+            preflight,
+        )
+        self.assertIn(
+            "needs.read-service-config.outputs.python_acceptance_runner_path",
+            preflight,
+        )
+        self.assertIn("validate_runner_inputs.py", preflight)
+        self.assertIn("TEST_TYPE: pytest", preflight)
+        self.assertLess(
+            deploy.index("Validate Python live-acceptance contract"),
+            deploy.index("Deploy to spi-stack (by digest)"),
+        )
 
     def test_required_summary_aggregates_the_python_lane(self):
         summary = _read(VALIDATE).split("docker-build-required:", 1)[1]
@@ -653,6 +685,7 @@ esac
         }
 
         self.assertIn("tests/test_python_build_contracts.py", cleanup)
+        self.assertIn("tests/test_integration_test_runners.py", cleanup)
         self.assertIn("tests/test_service_descriptor.py", cleanup)
         self.assertNotIn("tests", cleanup)
         self.assertNotIn("tests/unit", cleanup)
@@ -667,6 +700,17 @@ esac
         self.assertIn("generate_codeowners.py", script)
         self.assertIn("missing+=(\"service descriptor", script)
         self.assertIn("CODEOWNERS rule for", script)
+        self.assertIn("tests.acceptance.path", script)
+        self.assertIn("tests.acceptance.runnerPath", script)
+        self.assertIn('[[ "$build_lane" == "python" ]]', script)
+
+    def test_ruleset_readiness_uses_descriptor_metadata_for_python(self):
+        script = _read(SETUP_RULESETS)
+
+        self.assertIn("read_service_config.py --root . --format json --redact", script)
+        self.assertIn(".python_acceptance_test_path", script)
+        self.assertIn(".python_acceptance_runner_path", script)
+        self.assertIn('[[ "$build_lane" == "python" ]]', script)
 
     def test_settings_apply_never_echoes_descriptor_or_secret_values(self):
         script = _read(CHECK_VARIABLES)
