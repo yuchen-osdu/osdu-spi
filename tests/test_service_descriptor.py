@@ -74,6 +74,10 @@ tests:
     type: pytest
     path: tests/unit
     coverage: true
+  acceptance:
+    type: pytest
+    path: tests/acceptance
+    runnerPath: .spi/run_acceptance.py
 
 container:
   appModule: wdmsworker.app:app
@@ -208,6 +212,13 @@ class DescriptorValidationTests(unittest.TestCase):
                 "container:\n  appModule: demo.app:app\n",
                 "test-type-mismatch",
             ),
+            "acceptance suite on Java": (
+                "java-maven-azure",
+                "tests:\n  acceptance:\n    type: pytest\n"
+                "    path: tests/acceptance\n"
+                "    runnerPath: .spi/run_acceptance.py\n",
+                "archetype-mismatch",
+            ),
         }
 
         for label, (archetype, extra, expected) in unsupported.items():
@@ -287,6 +298,40 @@ class DescriptorValidationTests(unittest.TestCase):
         self.assertIn("missing-key", _codes(errors))
         self.assertTrue(any(error.path == "container.appModule" for error in errors))
 
+    def test_python_acceptance_suite_requires_a_path_and_runner(self):
+        document = descriptor.parse(
+            "schemaVersion: 1\n"
+            "service:\n  name: demo\n  archetype: python-uv-fastapi\n"
+            "tests:\n  acceptance:\n    type: pytest\n"
+            "container:\n  appModule: demo.app:app\n"
+        )
+
+        errors = descriptor.validate(document)
+        missing_paths = {
+            error.path for error in errors if error.code == "missing-key"
+        }
+        self.assertEqual(
+            {"tests.acceptance.path", "tests.acceptance.runnerPath"},
+            missing_paths,
+        )
+
+    def test_python_acceptance_runner_must_be_a_python_file(self):
+        document = descriptor.parse(
+            PYTHON_DESCRIPTOR.replace(
+                "runnerPath: .spi/run_acceptance.py",
+                "runnerPath: .spi/run_acceptance.sh",
+            )
+        )
+
+        errors = descriptor.validate(document)
+        self.assertTrue(
+            any(
+                error.path == "tests.acceptance.runnerPath"
+                and error.code == "invalid-path"
+                for error in errors
+            )
+        )
+
     def test_application_module_pattern_rejects_anything_but_module_colon_attribute(self):
         head = (
             "schemaVersion: 1\nservice:\n  name: demo\n  archetype: python-uv-fastapi\n"
@@ -364,6 +409,8 @@ class DescriptorResolutionTests(unittest.TestCase):
                     "python_unit_test_path": "",
                     "python_service_in_process_test_path": "",
                     "python_service_subprocess_test_path": "",
+                    "python_acceptance_test_path": "",
+                    "python_acceptance_runner_path": "",
                     "app_module": "",
                 },
                 config.outputs(),
@@ -390,6 +437,12 @@ class DescriptorResolutionTests(unittest.TestCase):
             self.assertEqual("dev", outputs["python_test_extras"])
             self.assertEqual("az", outputs["python_runtime_extras"])
             self.assertEqual("tests/unit", outputs["python_unit_test_path"])
+            self.assertEqual(
+                "tests/acceptance", outputs["python_acceptance_test_path"]
+            )
+            self.assertEqual(
+                ".spi/run_acceptance.py", outputs["python_acceptance_runner_path"]
+            )
             self.assertEqual("wdmsworker.app:app", outputs["app_module"])
             self.assertEqual([], config.warnings)
 

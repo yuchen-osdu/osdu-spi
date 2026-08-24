@@ -237,6 +237,10 @@
         "reason": "Template-development test; fork instances retain only upstream service tests"
       },
       {
+        "path": "tests/test_integration_test_runners.py",
+        "reason": "Template-development test; fork instances retain only upstream service tests"
+      },
+      {
         "path": "tests/test_service_config_workflows.py",
         "reason": "Template-development test; fork instances retain only upstream service tests"
       },

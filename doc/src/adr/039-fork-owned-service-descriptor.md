@@ -93,10 +93,13 @@ selecting a default build lane.
 descriptor_present  schema_version  archetype     service_name  dockerfile_profile
 unit_test_type      has_coverage    build_lane    lane_implemented  fallback
 python_runtime_version  python_distribution  python_import_package
-python_test_extras      python_runtime_extras  app_module
+python_test_extras      python_runtime_extras
+python_acceptance_test_path  python_acceptance_runner_path  app_module
 ```
 
-Job outputs never carry shell commands. Language lanes are statically declared and gated on
+Job outputs never carry shell commands. The Python acceptance runner is a validated
+repository-relative `.py` path, invoked as an argv element with a fixed JUnit argument rather
+than evaluated as command text. Language lanes are statically declared and gated on
 `build_lane`. The Java lane keeps its name, its action, and `vars.MAVEN_PROFILE` handling. The
 Python outputs are the `python-build` action's inputs and the canonical Python image's build
 arguments, so a service parameterises its build by editing the reviewed descriptor rather than the
@@ -157,13 +160,15 @@ sync exclusion now describe complementary behaviour rather than deleting ownersh
 3. Initialization generates descriptors for new repositories (this ADR).
 4. Add the `python-build` action, Dockerfile profile and static `python-build` job; generalize
    `docker-build` with a `source` build mode; flip `laneImplemented` for `python-uv-fastapi`
-   (done, issue #42). Python deployment and integration testing remain out of scope: the lane
-   ends at a published GHCR image and the deploy jobs are explicitly gated on
-   `build_lane == 'java'`. Descriptor-declared compatibility versions run as a separate required
+   (done, issue #42). Descriptor-declared compatibility versions run as a separate required
    matrix; test paths are passed explicitly to the action, and unsupported test arguments/types
    fail schema validation rather than being silently ignored.
-5. Pilot descriptors: Partition, then Entitlements, then the Python pilot.
-6. Once the fleet has descriptors, remove the remaining per-workflow language inference in
+5. Generalize the immutable-digest deploy job to both lanes and add a closed Maven/pytest runner
+   mode to the shared integration action (done, issue #68). Python declares only a working
+   directory and reviewed `.py` runner path; uv installs the committed lock before Azure login,
+   while all identity, cluster, environment and secret data remains admin-owned.
+6. Pilot descriptors: Partition, then Entitlements, then the Python pilot.
+7. Once the fleet has descriptors, remove the remaining per-workflow language inference in
    `cascade.yml` and `dependabot-validation.yml`, keeping a documented compatibility window.
 
 ## Consequences

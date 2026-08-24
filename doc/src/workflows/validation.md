@@ -28,8 +28,11 @@ logs a warning. An invalid descriptor, or one declaring an archetype whose lane 
 this template version, fails the required `🐳 Docker Build` check closed. Changes under `.spi/**`
 are always treated as build-relevant, so a descriptor-only pull request runs the full lane.
 
-Deployment and integration testing remain Java-only and are gated on `build_lane == 'java'`; a
-Python service stops at a validated and published container image.
+Deployment is language-neutral: Java and Python both pass the published immutable digest to the
+same `aks-deploy` action. Integration testing keeps the shared digest guard, health probes, token
+minting and Key Vault mapping, then selects Maven for Java or a descriptor-declared pytest runner
+for Python. The Python action installs `uv.lock` before Azure login and invokes the reviewed runner
+without shell evaluation.
 
 ### Code Quality Validation
 The system verifies that your code is functional and maintainable by running build verification to ensure code compiles and all dependencies resolve correctly, executing the full test suite and generating coverage reports, and performing lint checks to enforce consistent code style and formatting standards.
@@ -123,6 +126,8 @@ The workflow runs these validation jobs:
 | **Python Build** | Syncs, lints and tests | Locked `uv sync`, ruff/mypy, pytest suites, runtime import smoke |
 | **Container Image Validation** | Builds without registry credentials | Canonical Java or Python image, amd64 |
 | **Build & Publish Container Image** | Trusted release build and GHCR push | Java multi-arch or Python amd64 |
+| **Deploy to spi-stack** | Rolls out the published candidate | Shared Deployment patch by immutable digest |
+| **Integration Tests** | Exercises the live candidate | Maven for Java; locked pytest runner for Python |
 | **Code Validation** | Process compliance | Conventional commits, merge conflicts, branch status |
 
 ## Branch-Specific Rules

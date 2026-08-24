@@ -51,18 +51,18 @@ if: |
   needs.docker-build.result == 'success' &&
   ( <event-trust predicate above> )
 
-# Deploy to spi-stack (Java only)
+# Deploy to spi-stack (Java or Python image)
 if: |
   !cancelled() &&
-  needs.read-service-config.outputs.build_lane == 'java' &&
+  needs.read-service-config.outputs.build_lane in ['java', 'python'] &&
   needs.docker-push.result == 'success' &&
   vars.AZURE_CLIENT_ID != '' &&
   ( <event-trust predicate above> )
 
-# Integration Tests (Java only)
+# Integration Tests (Maven or pytest runner)
 if: |
   !cancelled() &&
-  needs.read-service-config.outputs.build_lane == 'java' &&
+  needs.read-service-config.outputs.build_lane in ['java', 'python'] &&
   needs.docker-push.result == 'success' &&
   needs.deploy.result == 'success' &&
   vars.AZURE_CLIENT_ID != '' &&
@@ -70,7 +70,9 @@ if: |
 ```
 
 The angle-bracket line is explanatory pseudocode; the checked-in workflow
-expands the full predicate at every credentialed job.
+expands the full predicate at every credentialed job. The list-membership
+expressions above are also explanatory pseudocode; the workflow spells them as
+explicit `java || python` comparisons.
 
 For example, the publication job's concrete normal/dispatch arms are:
 
