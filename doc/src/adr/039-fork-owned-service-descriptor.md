@@ -163,10 +163,11 @@ sync exclusion now describe complementary behaviour rather than deleting ownersh
    (done, issue #42). Descriptor-declared compatibility versions run as a separate required
    matrix; test paths are passed explicitly to the action, and unsupported test arguments/types
    fail schema validation rather than being silently ignored.
-5. Generalize the immutable-digest deploy job to both lanes and add a closed Maven/pytest runner
-   mode to the shared integration action (done, issue #68). Python declares only a working
+5. Generalize the immutable-digest deploy job to both lanes and add a closed Maven/delegated-Python
+   runner mode to the shared integration action (issues #68/#70). Python declares only a working
    directory and reviewed `.py` runner path; uv installs the committed lock before Azure login,
-   while all identity, cluster, environment and secret data remains admin-owned.
+   then the action exports `TEST_REPO_ROOT`/`TEST_RESULTS_DIR` and invokes the runner as argv.
+   Identity, cluster, environment and secret data remains admin-owned.
 6. Pilot descriptors: Partition, then Entitlements, then the Python pilot.
 7. Once the fleet has descriptors, remove the remaining per-workflow language inference in
    `cascade.yml` and `dependabot-validation.yml`, keeping a documented compatibility window.

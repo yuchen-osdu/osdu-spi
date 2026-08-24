@@ -75,7 +75,7 @@ tests:
     path: tests/unit
     coverage: true
   acceptance:
-    type: pytest
+    type: python
     path: tests/acceptance
     runnerPath: .spi/run_acceptance.py
 
@@ -214,7 +214,7 @@ class DescriptorValidationTests(unittest.TestCase):
             ),
             "acceptance suite on Java": (
                 "java-maven-azure",
-                "tests:\n  acceptance:\n    type: pytest\n"
+                "tests:\n  acceptance:\n    type: python\n"
                 "    path: tests/acceptance\n"
                 "    runnerPath: .spi/run_acceptance.py\n",
                 "archetype-mismatch",
@@ -302,7 +302,7 @@ class DescriptorValidationTests(unittest.TestCase):
         document = descriptor.parse(
             "schemaVersion: 1\n"
             "service:\n  name: demo\n  archetype: python-uv-fastapi\n"
-            "tests:\n  acceptance:\n    type: pytest\n"
+            "tests:\n  acceptance:\n    type: python\n"
             "container:\n  appModule: demo.app:app\n"
         )
 

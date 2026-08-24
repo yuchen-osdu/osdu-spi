@@ -491,7 +491,7 @@ class DockerLaneSelectionTests(unittest.TestCase):
         integration = _job_block(text, "integration-test")
         self.assertIn("needs.deploy.result == 'success'", integration)
         self.assertIn(
-            "test_type: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'pytest' || 'maven' }}",
+            "test_type: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'python' || 'maven' }}",
             integration,
         )
         self.assertIn(
@@ -525,7 +525,7 @@ class DockerLaneSelectionTests(unittest.TestCase):
             preflight,
         )
         self.assertIn("validate_runner_inputs.py", preflight)
-        self.assertIn("TEST_TYPE: pytest", preflight)
+        self.assertIn("TEST_TYPE: python", preflight)
         self.assertLess(
             deploy.index("Validate Python live-acceptance contract"),
             deploy.index("Deploy to spi-stack (by digest)"),
