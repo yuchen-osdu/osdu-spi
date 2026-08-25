@@ -46,6 +46,9 @@ Architecture Decision Records for Fork Management Template
 | 036 | Workflow Trust Boundaries for CI/CD        | [ADR-036](036-workflow-trust-boundaries.md) |
 | 037 | Engineering System Owns the Canonical Service Dockerfile | [ADR-037](037-engineering-system-owns-service-dockerfile.md) |
 | 038 | Defer Extra-File Dockerfile Support for Core Service Onboarding | [ADR-038](038-defer-extra-file-dockerfile-support.md) |
+| 039 | Fork-Owned Service Descriptor              | [ADR-039](039-fork-owned-service-descriptor.md) |
+| 040 | Sync Canonical Build Files Without Owning the Directory | [ADR-040](040-canonical-build-files-not-directory.md) |
+| 041 | Transactional Candidate Validation         | [ADR-041](041-transactional-candidate-validation.md) |
 
 ## Overview
 

@@ -473,45 +473,45 @@ class DockerLaneSelectionTests(unittest.TestCase):
         )
         self.assertNotIn("needs.java-build", condition)
 
-    def test_deploy_and_integration_tests_accept_both_image_lanes(self):
-        text = _read(VALIDATE)
+    def test_deploy_test_restore_transaction_accepts_both_image_lanes(self):
+        block = _job_block(_read(VALIDATE), "deploy-test-restore")
 
-        for job in ("deploy", "integration-test"):
-            with self.subTest(job=job):
-                block = _job_block(text, job)
-                self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
-                self.assertIn("needs.read-service-config.outputs.build_lane == 'python'", block)
-                self.assertIn("needs.docker-push.result == 'success'", block)
-                self.assertNotIn("python-build", block)
-                # Static sibling language jobs are skipped. A status function prevents
-                # those transitive skips from suppressing deploy, while the explicit
-                # image/deploy result predicates above keep failures closed.
-                self.assertIn("!cancelled()", block)
-                self.assertNotIn("always()", block)
-        integration = _job_block(text, "integration-test")
-        self.assertIn("needs.deploy.result == 'success'", integration)
+        self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
+        self.assertIn("needs.read-service-config.outputs.build_lane == 'python'", block)
+        self.assertIn("needs.docker-push.result == 'success'", block)
+        self.assertNotIn("python-build", block)
+        self.assertIn("!cancelled()", block)
         self.assertIn(
             "test_type: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'python' || 'maven' }}",
-            integration,
+            block,
         )
         self.assertIn(
             "if: needs.read-service-config.outputs.build_lane == 'java'",
-            integration,
+            block,
         )
+        self.assertIn("expected_digest: ${{ steps.deploy.outputs.deployed_digest }}", block)
+        self.assertIn("image_repository: ${{ steps.deploy.outputs.previous_repository }}", block)
+        self.assertIn("image_digest: ${{ steps.deploy.outputs.previous_digest }}", block)
+        self.assertIn("if: always() && steps.deploy.outputs.previous_image != ''", block)
+        self.assertEqual(3, block.count("continue-on-error: true"))
+        self.assertLess(block.index("Deploy candidate to spi-stack"), block.index("Run integration tests"))
+        self.assertLess(block.index("Run integration tests"), block.index("Restore pre-run image"))
+        self.assertLess(block.index("Restore pre-run image"), block.index("Apply transaction verdict"))
 
     def test_selected_deploy_gate_is_not_suppressed_by_skipped_language_siblings(self):
-        text = _read(VALIDATE)
+        condition = (
+            _job_block(_read(VALIDATE), "deploy-test-restore")
+            .split("if: |", 1)[1]
+            .split("runs-on:", 1)[0]
+        )
 
-        for job in ("deploy", "integration-test"):
-            with self.subTest(job=job):
-                condition = _job_block(text, job).split("if: |", 1)[1].split("runs-on:", 1)[0]
-                self.assertIn("!cancelled()", condition)
-                self.assertNotIn("needs.java-build", condition)
-                self.assertNotIn("needs.python-build", condition)
-                self.assertNotIn("needs.python-compatibility", condition)
+        self.assertIn("!cancelled()", condition)
+        self.assertNotIn("needs.java-build", condition)
+        self.assertNotIn("needs.python-build", condition)
+        self.assertNotIn("needs.python-compatibility", condition)
 
     def test_python_deploy_fails_before_login_without_live_acceptance_metadata(self):
-        deploy = _job_block(_read(VALIDATE), "deploy")
+        deploy = _job_block(_read(VALIDATE), "deploy-test-restore")
         preflight = deploy.split(
             '- name: "Validate Python live-acceptance contract"', 1
         )[1].split("- name:", 1)[0]
@@ -528,7 +528,30 @@ class DockerLaneSelectionTests(unittest.TestCase):
         self.assertIn("TEST_TYPE: python", preflight)
         self.assertLess(
             deploy.index("Validate Python live-acceptance contract"),
-            deploy.index("Deploy to spi-stack (by digest)"),
+            deploy.index("Deploy candidate to spi-stack"),
+        )
+
+    def test_deploy_and_integration_required_contexts_are_always_reporting(self):
+        text = _read(VALIDATE)
+        deploy = _job_block(text, "deploy-required")
+        integration = _job_block(text, "integration-test-required")
+
+        self.assertIn('name: "🚀 Deploy to spi-stack"', deploy)
+        self.assertIn('name: "🧪 Integration Tests"', integration)
+        for block in (deploy, integration):
+            self.assertIn("if: always()", block)
+            self.assertIn("docker-push", block)
+            self.assertIn("deploy-test-restore", block)
+            self.assertIn('DOCKER_PUSH_RESULT: ${{ needs.docker-push.result }}', block)
+            self.assertIn(
+                'RESTORE_RESULT: ${{ needs.deploy-test-restore.outputs.restore_result }}',
+                block,
+            )
+            self.assertIn("Candidate image publication did not succeed", block)
+            self.assertIn("Pre-run image restore did not succeed", block)
+        self.assertIn(
+            'TEST_RESULT: ${{ needs.deploy-test-restore.outputs.test_result }}',
+            integration,
         )
 
     def test_required_summary_aggregates_the_python_lane(self):
@@ -686,6 +709,7 @@ esac
 
         self.assertIn("tests/test_python_build_contracts.py", cleanup)
         self.assertIn("tests/test_integration_test_runners.py", cleanup)
+        self.assertIn("tests/test_aks_deploy_contracts.py", cleanup)
         self.assertIn("tests/test_service_descriptor.py", cleanup)
         self.assertNotIn("tests", cleanup)
         self.assertNotIn("tests/unit", cleanup)

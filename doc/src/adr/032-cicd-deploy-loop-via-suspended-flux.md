@@ -23,6 +23,9 @@ Key mechanics:
 - Per-PR deploy jobs execute `kubectl set image deployment/<name> <container>=<registry>/<image>@<digest> -n osdu` directly.
 - Images are always referenced by **immutable digest** (`sha256:…`), never by mutable tag, so the running image is guaranteed to be what the build produced.
 - A pre-flight step in every deploy job asserts that all Flux Kustomizations are still suspended; the job fails fast if any are found resumed, surfacing accidental operator action immediately.
+- Candidate deployment, integration testing, and restoration run in one per-service
+  transaction. The transaction restores the complete immutable image reference
+  observed before mutation, whether tests pass or fail (ADR-041).
 - Flux is resumed only during a **planned baseline refresh** — a coordinated, CI-freeze outage that resets all Deployments to the declared HelmRelease state, then re-suspends Flux.
 - Deployment and container names are exposed as per-service GitHub repo variables (`K8S_DEPLOYMENT_NAME`, `K8S_CONTAINER_NAME`) rather than derived from service names, insulating CI from Helm chart naming changes.
 
@@ -38,8 +41,12 @@ Key mechanics:
 
 **Negative:**
 
-- Cluster state drifts progressively from the declared HelmRelease manifests after many CI runs; only a baseline refresh resets it.
+- Cluster state can still differ from the declared HelmRelease manifests, but a
+  completed candidate-validation transaction no longer adds drift because it
+  restores the exact pre-run image.
 - Operators cannot rely on Flux self-healing during CI cycles (e.g., an accidental `kubectl delete deployment` is not auto-restored).
+- Manual cancellation or runner loss can interrupt transaction cleanup; operators
+  use the break-glass restore workflow with the recorded complete image reference.
 - Baseline refresh is a planned outage requiring a CI freeze across all current service forks — not a casual cron job.
 - The "CI mode" invariant requires explicit operator awareness; documentation and the pre-flight assertion are the only enforcement mechanisms.
 
