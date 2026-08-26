@@ -348,6 +348,7 @@ jobs:
           # ADR-039: optional per-organization owner for the seeded `/.spi/` CODEOWNERS rule.
           # Unset leaves a documented placeholder rather than an invalid team reference.
           SPI_ENGINEERING_OWNERS: ${{ vars.SPI_ENGINEERING_OWNERS }}
+          UPSTREAM_REPO_URL: ${{ vars.UPSTREAM_REPO_URL }}  # May be empty when the variable was set earlier in this same run; deploy-fork-resources.sh falls back to gh variable get
         run: |
           # Copy workflows from template-workflows before deploy-fork-resources deletes the directory
           echo "Deploying production workflows from template..."

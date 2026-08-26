@@ -149,6 +149,37 @@ class JunitSummaryTests(unittest.TestCase):
 
 
 class WorkflowContractTests(unittest.TestCase):
+    def test_upstream_filter_is_opt_in_with_legacy_merge_fallback(self):
+        workflow = (
+            ROOT / ".github" / "template-workflows" / "sync.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('if [ -f ".github/upstream-filter.yml" ]; then', workflow)
+        self.assertIn("generate-branch.sh", workflow)
+        self.assertIn("No upstream-filter config; retaining the legacy merge path", workflow)
+        self.assertIn('git merge "$UPSTREAM_SYNC_REF" -X theirs --no-edit', workflow)
+
+        validate = (
+            ROOT / ".github" / "template-workflows" / "validate.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("upstream_filter_enabled:", validate)
+        self.assertIn(
+            "needs.java-build.outputs.upstream_filter_enabled != 'true'",
+            validate,
+        )
+
+    def test_java_build_pins_pull_request_target_to_the_head_sha(self):
+        action = (
+            ROOT / ".github" / "actions" / "java-build" / "action.yml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "ref: ${{ github.event_name == 'pull_request_target' && "
+            "github.event.pull_request.head.sha || github.sha }}",
+            action,
+        )
+        self.assertIn("Assert the PR head is checked out", action)
+
     def test_template_sync_uses_conventional_pull_request_titles(self):
         workflow = (
             ROOT / ".github" / "template-workflows" / "sync-template.yml"

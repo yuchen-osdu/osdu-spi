@@ -30,6 +30,9 @@
 #   SPI_ENGINEERING_OWNERS  Optional. GitHub team/user that must review `.spi/**`
 #                           (for example "@my-org/engineering-system"). When unset or
 #                           invalid a documented, commented placeholder is written.
+#   UPSTREAM_REPO_URL       Upstream repository URL used to derive the service slug
+#                           for <service> substitution. Falls back to the repository
+#                           variable when unset.
 #
 # Usage:
 #   ./deploy-fork-resources.sh
@@ -54,12 +57,22 @@ fi
 if [[ -f "$DEPENDABOT_SOURCE" ]]; then
   echo "Installing fork-specific Dependabot configuration from $DEPENDABOT_SOURCE..."
 
-  # Detect service name from repository name
-  SERVICE_NAME=$(basename "$(git rev-parse --show-toplevel)")
-  echo "Detected service name: $SERVICE_NAME"
+  # Derive the service slug from the upstream URL (e.g. partition), not the
+  # checkout directory, which on a runner is the repository name (osdu-spi-partition).
+  SERVICE_SLUG=""
+  UPSTREAM_URL="${UPSTREAM_REPO_URL:-$(gh variable get UPSTREAM_REPO_URL 2>/dev/null || true)}"
+  if [[ -n "$UPSTREAM_URL" ]]; then
+    SERVICE_SLUG=$(basename "${UPSTREAM_URL%.git}")
+    echo "Derived service slug: $SERVICE_SLUG"
+  fi
 
-  # Copy and replace <service> placeholders, escaping special characters in service name
-  SERVICE_ESCAPED=${SERVICE_NAME//&/\\&}
+  if grep -q "<service>" "$DEPENDABOT_SOURCE" && [[ -z "$SERVICE_SLUG" ]]; then
+    echo "ERROR: dependabot.yml uses the <service> placeholder but UPSTREAM_REPO_URL is not available"
+    exit 1
+  fi
+
+  # Copy and replace <service> placeholders, escaping special characters in the slug
+  SERVICE_ESCAPED=${SERVICE_SLUG//&/\\&}
   sed "s|<service>|$SERVICE_ESCAPED|g" "$DEPENDABOT_SOURCE" > ".github/dependabot.yml"
   git add ".github/dependabot.yml"
 fi
