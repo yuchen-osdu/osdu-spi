@@ -49,6 +49,7 @@ Architecture Decision Records for Fork Management Template
 | 039 | Fork-Owned Service Descriptor              | [ADR-039](039-fork-owned-service-descriptor.md) |
 | 040 | Sync Canonical Build Files Without Owning the Directory | [ADR-040](040-canonical-build-files-not-directory.md) |
 | 041 | Transactional Candidate Validation         | [ADR-041](041-transactional-candidate-validation.md) |
+| 042 | Upstream Filter Transform and One-Time Azure Seeding | [ADR-042](042-upstream-filter-transform.md) |
 
 ## Overview
 
@@ -251,3 +252,12 @@ These Architecture Decision Records document the key design choices made in the 
 - Each fork owns `.spi/service.yaml`: a schema-validated, closed-enum declaration of build archetype and non-privileged build/test metadata; template-sync never overwrites `.spi/**`
 - Copied workflows gain a `read-service-config` prelude whose `build_lane` output selects statically declared language lanes, keeping the exact `🐳 Docker Build` required context; an invalid or unimplemented archetype fails closed
 - `.spi/**` is explicitly build-relevant in validate/CodeQL path filtering; absent descriptors keep the legacy Java inference, and privileged deployment configuration stays in repository/environment variables
+
+**Transactional Candidate Validation (ADR-041)**
+- Candidate deployment, live tests, and exact pre-run image restoration hold one per-service concurrency slot
+- Stable Deploy and Integration summary checks fail closed when publication, validation, or restoration does not complete
+
+**Upstream Filter Transform and One-Time Azure Seeding (ADR-042)**
+- Opted-in forks generate rather than merge: the filter runs over a scratch extraction of the verbatim upstream tip while the workflow checkout never leaves `main`, and the result lands as a merge-shaped commit via git plumbing; unconfigured yuchen forks retain the legacy merge path
+- Allow-list with halt-on-unknown (exit 2) strips non-Azure providers, `<svc>-core-plus`, all of `devops/`, non-Azure `testing/` modules, and `.gitlab-ci.yml` (274 of 421 files discarded on the partition reference fork; 88 remain on `fork_upstream`)
+- `provider/<svc>-azure` and `testing/<svc>-test-azure` become fork-owned at cutover; future init-time seeding remains deferred. The root pom `azure` profile and `testing/pom.xml` module line are filter-injected each sync, while the cascade stamps the fork-owned poms on `fork_integration`

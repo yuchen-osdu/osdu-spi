@@ -225,10 +225,16 @@ class ServiceConfigPreludeTests(unittest.TestCase):
         text = _read(VALIDATE)
         build_text = _read(BUILD)
         profile_expression = "${{ vars.MAVEN_PROFILE || 'core,azure' }}"
+        fork_upstream_profile_expression = (
+            "${{ steps.filter-mode.outputs.enabled == 'true' && 'core' || "
+            "vars.MAVEN_PROFILE || 'core,azure' }}"
+        )
 
         self.assertIn('name: "🔨 Java Build"', text)
         self.assertIn("uses: ./.github/actions/java-build", text)
-        self.assertIn(f"maven_profile: {profile_expression}", text)
+        self.assertIn('name: "Detect filtered fork_upstream mode"', text)
+        self.assertIn('origin/main:.github/upstream-filter.yml', text)
+        self.assertIn(f"maven_profile: {fork_upstream_profile_expression}", text)
         self.assertIn(f"maven_profile: {profile_expression}", build_text)
 
     def test_required_docker_build_context_is_unchanged(self):
