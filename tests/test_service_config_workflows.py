@@ -493,6 +493,7 @@ class DockerLaneSelectionTests(unittest.TestCase):
         self.assertIn("needs.read-service-config.outputs.build_lane == 'java'", block)
         self.assertIn("needs.read-service-config.outputs.build_lane == 'python'", block)
         self.assertIn("needs.docker-push.result == 'success'", block)
+        self.assertIn("vars.DEPLOY_VALIDATED == 'true'", block)
         self.assertNotIn("python-build", block)
         self.assertIn("!cancelled()", block)
         self.assertIn(
@@ -565,6 +566,7 @@ class DockerLaneSelectionTests(unittest.TestCase):
             )
             self.assertIn("Candidate image publication did not succeed", block)
             self.assertIn("Pre-run image restore did not succeed", block)
+            self.assertIn("first onboarding canary has not completed", block)
         self.assertIn(
             'TEST_RESULT: ${{ needs.deploy-test-restore.outputs.test_result }}',
             integration,

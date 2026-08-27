@@ -944,6 +944,7 @@ jobs:
          needs.read-service-config.outputs.build_lane == 'python') &&
         needs.docker-push.result == 'success' &&
         vars.AZURE_CLIENT_ID != '' &&
+        vars.DEPLOY_VALIDATED == 'true' &&
         github.actor != 'dependabot[bot]' &&
         github.event_name != 'pull_request_target' &&
         github.event_name != 'workflow_dispatch' &&
@@ -1176,6 +1177,10 @@ jobs:
             echo "✅ Deploy skipped - repository is not onboarded to a Stack."
             exit 0
           fi
+          if [ "$DEPLOY_VALIDATED" != "true" ] && [ "$EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "✅ Deploy skipped - first onboarding canary has not completed."
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$FORCE_FULL_PIPELINE" != "true" ]; then
             echo "✅ Deploy skipped - force_full_pipeline was not requested."
             exit 0
@@ -1206,6 +1211,7 @@ jobs:
           ACTOR: ${{ github.actor }}
           LANE: ${{ needs.read-service-config.outputs.build_lane }}
           ONBOARDED: ${{ vars.AZURE_CLIENT_ID != '' }}
+          DEPLOY_VALIDATED: ${{ vars.DEPLOY_VALIDATED || 'false' }}
           EVENT_NAME: ${{ github.event_name }}
           FORCE_FULL_PIPELINE: ${{ inputs.force_full_pipeline || false }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
@@ -1250,6 +1256,10 @@ jobs:
             echo "✅ Integration tests skipped - repository is not onboarded to a Stack."
             exit 0
           fi
+          if [ "$DEPLOY_VALIDATED" != "true" ] && [ "$EVENT_NAME" != "workflow_dispatch" ]; then
+            echo "✅ Integration tests skipped - first onboarding canary has not completed."
+            exit 0
+          fi
           if [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$FORCE_FULL_PIPELINE" != "true" ]; then
             echo "✅ Integration tests skipped - force_full_pipeline was not requested."
             exit 0
@@ -1284,6 +1294,7 @@ jobs:
           ACTOR: ${{ github.actor }}
           LANE: ${{ needs.read-service-config.outputs.build_lane }}
           ONBOARDED: ${{ vars.AZURE_CLIENT_ID != '' }}
+          DEPLOY_VALIDATED: ${{ vars.DEPLOY_VALIDATED || 'false' }}
           EVENT_NAME: ${{ github.event_name }}
           FORCE_FULL_PIPELINE: ${{ inputs.force_full_pipeline || false }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
