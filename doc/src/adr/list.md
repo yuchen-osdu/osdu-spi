@@ -230,7 +230,7 @@ These Architecture Decision Records document the key design choices made in the 
 
 **Azure-Only Maven Profile Restriction (ADR-035)**
 - CI builds the Azure profile set with a hardcoded default of `core,azure` (correct for 9/10 forks); `core` is `activeByDefault`, so a bare `-P azure` would drop it
-- `MAVEN_PROFILE` is an optional per-fork override (`${{ vars.MAVEN_PROFILE || 'core,azure' }}`) for forks that deviate (e.g. `indexer-queue`); never emits a bare `-P`
+- Deviant forks declare `build.mavenProfiles` in `.spi/service.yaml`; acceptance Maven argv is declared separately under `tests.acceptance`
 - Faster, Azure-relevant CI signal with zero per-fork config in the common case; non-Azure provider regressions are intentionally out of the default path
 
 **Workflow Trust Boundaries for CI/CD (ADR-036)**
@@ -241,7 +241,7 @@ These Architecture Decision Records document the key design choices made in the 
 **Engineering System Owns the Canonical Service Dockerfile (ADR-037)**
 - One canonical `build/Dockerfile` lives in the template and syncs to every fork (`sync-config.json` `directories[]`); services do not supply their own
 - Mirrors the OSDU community `service-base-image/java/Dockerfile`: `COPY ${JAR_FILE} /app.jar` (no Maven in the image build); the JAR is the one our `java-build` job compiled from source, never a prebuilt artifact from OSDU's Maven registry
-- `JAR_FILE` defaults to `provider/<SERVICE_NAME>-azure/target/*-spring-boot.jar` (override via the `SERVICE_TARGET_JAR` repository variable); `BASE_IMAGE` is an `ARG` defaulting to OSDU `alpine-zulu17` so a later registry pivot is a one-line swap
+- `JAR_FILE` defaults to `provider/<service>-azure/target/*-spring-boot.jar`; ambiguous services declare `build.artifact.path` in the descriptor
 
 **Defer Extra-File Dockerfile Support for Core Service Onboarding (ADR-038)**
 - No Dockerfile or `docker-build` action change is required for the immediate 10 core service onboarding wave
@@ -252,6 +252,11 @@ These Architecture Decision Records document the key design choices made in the 
 - Each fork owns `.spi/service.yaml`: a schema-validated, closed-enum declaration of build archetype and non-privileged build/test metadata; template-sync never overwrites `.spi/**`
 - Copied workflows gain a `read-service-config` prelude whose `build_lane` output selects statically declared language lanes, keeping the exact `🐳 Docker Build` required context; an invalid or unimplemented archetype fails closed
 - `.spi/**` is explicitly build-relevant in validate/CodeQL path filtering; absent descriptors keep the legacy Java inference, and privileged deployment configuration stays in repository/environment variables
+
+**Descriptor-Owned Acceptance Contract (ADR-043)**
+- Schema version 2 moves Java and Python acceptance paths, runners, Maven argv, token names, dependency probes, Stack-fact bindings, optional Key Vault names, and bounded timeout/retry policy into `.spi/service.yaml`
+- The integration action resolves only named environment facts written by `spi onboard`; identity, cluster, Deployment targets and secret values remain outside pull-request-controlled metadata
+- Deploy and integration checks become required only after the descriptor is complete, environment bindings exist, and the first transactional canary sets `DEPLOY_VALIDATED=true`
 
 **Transactional Candidate Validation (ADR-041)**
 - Candidate deployment, live tests, and exact pre-run image restoration hold one per-service concurrency slot

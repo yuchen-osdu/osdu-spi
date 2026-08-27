@@ -29,7 +29,7 @@ descriptor = _load_module("descriptor", ".github/scripts/service-config/descript
 
 
 JAVA_DESCRIPTOR = """\
-schemaVersion: 1
+schemaVersion: 2
 
 service:
   name: partition
@@ -41,18 +41,44 @@ build:
     - azure
   artifact:
     discovery: spring-boot-azure
+    path: "**/target/*-spring-boot.jar"
 
 tests:
   unit:
     type: maven
     coverage: jacoco
+  acceptance:
+    type: maven
+    path: testing/integration
+    mavenArguments:
+      - -pl
+      - legal-test-azure
+      - -am
+      - verify
+      - -DfailIfNoTests=false
+      - -Dtest=!Class#method,!Other#method
+    noDataAccessTokenEnv: NO_DATA_ACCESS_TOKEN
+    bindings:
+      PARTITION_ID:
+        source: literal
+        value: opendes
+      LEGAL_HOST:
+        source: gateway
+        suffix: /api/legal/v1
+    keyVaultBindings:
+      CLIENT_SECRET: acceptance-client-secret
+    dependencies:
+      entitlements: /api/entitlements/v2/_ah/readiness_check
+    timeoutMinutes: 40
+    maxAttempts: 3
 
 container:
   dockerfileProfile: java
 """
 
+
 PYTHON_DESCRIPTOR = """\
-schemaVersion: 1
+schemaVersion: 2
 
 service:
   name: wellbore-ddms-worker
@@ -78,10 +104,47 @@ tests:
     type: python
     path: tests/acceptance
     runnerPath: .spi/run_acceptance.py
+    rootTokenEnv: TEST_ROOT_TOKEN
+    bindings:
+      STORAGE_ACCOUNT:
+        source: storageAccount
+      GATEWAY_URL:
+        source: gateway
+        suffix: /api
+    keyVaultBindings:
+      CLIENT_SECRET: acceptance-client-secret
+    dependencies:
+      partition: /api/partition/v1/_ah/readiness_check
 
 container:
   appModule: wdmsworker.app:app
 """
+
+RESERVED_ENVIRONMENT_IDENTIFIERS = (
+    "PATH",
+    "HOME",
+    "SHELL",
+    "PWD",
+    "OLDPWD",
+    "BASH_ENV",
+    "ENV",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "JAVA_TOOL_OPTIONS",
+    "MAVEN_OPTS",
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_PATH",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_TOKEN",
+    "AZURE_CLIENT_ID",
+    "AZURE_TENANT_ID",
+    "AZURE_SUBSCRIPTION_ID",
+    "AZURE_FEDERATED_TOKEN_FILE",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+)
 
 
 def _repository(descriptor_text: str = "", markers=()):
@@ -107,6 +170,17 @@ class DescriptorParsingTests(unittest.TestCase):
 
         self.assertEqual("partition", document["service"]["name"])
         self.assertEqual(["core", "azure"], document["build"]["mavenProfiles"])
+        self.assertEqual(
+            [
+                "-pl",
+                "legal-test-azure",
+                "-am",
+                "verify",
+                "-DfailIfNoTests=false",
+                "-Dtest=!Class#method,!Other#method",
+            ],
+            document["tests"]["acceptance"]["mavenArguments"],
+        )
         self.assertEqual([], descriptor.validate(document))
 
     def test_reads_a_python_descriptor_with_flow_sequences(self):
@@ -214,7 +288,7 @@ class DescriptorValidationTests(unittest.TestCase):
             ),
             "acceptance suite on Java": (
                 "java-maven-azure",
-                "tests:\n  acceptance:\n    type: python\n"
+                "tests:\n  acceptance:\n    type: maven\n"
                 "    path: tests/acceptance\n"
                 "    runnerPath: .spi/run_acceptance.py\n",
                 "archetype-mismatch",
@@ -228,6 +302,293 @@ class DescriptorValidationTests(unittest.TestCase):
                     + extra
                 )
                 self.assertIn(expected, _codes(descriptor.validate(document)))
+
+    def test_acceptance_type_must_match_the_archetype(self):
+        cases = {
+            "Java": (
+                "java-maven-azure",
+                "python",
+                "",
+            ),
+            "Python": (
+                "python-uv-fastapi",
+                "maven",
+                "    runnerPath: .spi/run_acceptance.py\n"
+                "container:\n  appModule: demo.app:app\n",
+            ),
+        }
+
+        for label, (archetype, suite_type, extra) in cases.items():
+            with self.subTest(label=label):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    f"service:\n  name: demo\n  archetype: {archetype}\n"
+                    "tests:\n  acceptance:\n"
+                    f"    type: {suite_type}\n"
+                    "    path: tests/acceptance\n"
+                    + extra
+                )
+                self.assertIn("test-type-mismatch", _codes(descriptor.validate(document)))
+
+    def test_java_maven_arguments_are_individual_bounded_argv_tokens(self):
+        valid = descriptor.parse(JAVA_DESCRIPTOR)
+        self.assertEqual([], descriptor.validate(valid))
+
+        for value in ('"verify -DskipTests"', '""'):
+            with self.subTest(value=value):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    mavenArguments: [{value}]\n"
+                )
+                self.assertTrue(
+                    {"invalid-value", "empty-list"} & set(_codes(descriptor.validate(document)))
+                )
+
+        document = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+            "    mavenArguments: [verify]\n"
+        )
+        document["tests"]["acceptance"]["mavenArguments"] = ["verify\nbuild_lane=python"]
+        self.assertIn("invalid-value", _codes(descriptor.validate(document)))
+
+        document = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: python-uv-fastapi\n"
+            "tests:\n  acceptance:\n"
+            "    type: python\n"
+            "    path: tests/acceptance\n"
+            "    runnerPath: .spi/run_acceptance.py\n"
+            "    mavenArguments: [verify]\n"
+            "container:\n  appModule: demo.app:app\n"
+        )
+        self.assertIn("archetype-mismatch", _codes(descriptor.validate(document)))
+
+    def test_acceptance_dynamic_mapping_keys_and_values_are_constrained(self):
+        cases = {
+            "binding env key": (
+                "bindings:\n      BAD-NAME:\n        source: gateway\n",
+                "invalid-key",
+            ),
+            "binding suffix": (
+                'bindings:\n      HOST:\n        source: gateway\n        suffix: "/api;echo"\n',
+                "invalid-value",
+            ),
+            "binding value mapping remains closed": (
+                "bindings:\n      HOST:\n        source: gateway\n        extra: nope\n",
+                "unknown-key",
+            ),
+            "key vault env key": (
+                "keyVaultBindings:\n      9TOKEN: client-secret\n",
+                "invalid-key",
+            ),
+            "key vault secret name": (
+                "keyVaultBindings:\n      CLIENT_SECRET: secret_value\n",
+                "invalid-value",
+            ),
+            "dependency slug": (
+                "dependencies:\n      Partition_Service: /health\n",
+                "invalid-key",
+            ),
+            "dependency path": (
+                "dependencies:\n      partition: health\n",
+                "invalid-value",
+            ),
+        }
+
+        for label, (mapping, expected) in cases.items():
+            with self.subTest(label=label):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    {mapping}"
+                )
+                self.assertIn(expected, _codes(descriptor.validate(document)))
+
+        valid_dynamic_names = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+            "    bindings:\n"
+            "      TOKEN:\n"
+            "        source: literal\n"
+            "        value: test-token-name\n"
+            "    keyVaultBindings:\n"
+            "      SECRET: acceptance-secret\n"
+            "    dependencies:\n"
+            "      environment: /health\n"
+            "      3d-service: /ready\n"
+        )
+        self.assertEqual([], descriptor.validate(valid_dynamic_names))
+
+    def test_binding_literal_value_consistency_is_enforced(self):
+        cases = {
+            "literal without value": (
+                "source: literal\n",
+                "missing-key",
+            ),
+            "resolved source with value": (
+                "source: gateway\n        value: https://example.test\n",
+                "source-value-mismatch",
+            ),
+        }
+
+        for label, (binding, expected) in cases.items():
+            with self.subTest(label=label):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    "    bindings:\n"
+                    "      TEST_VALUE:\n"
+                    f"        {binding}"
+                )
+                self.assertIn(expected, _codes(descriptor.validate(document)))
+
+    def test_acceptance_integer_bounds_and_environment_names_are_enforced(self):
+        integer_cases = (
+            ("timeoutMinutes", 0),
+            ("timeoutMinutes", 181),
+            ("maxAttempts", 0),
+            ("maxAttempts", 6),
+        )
+        for field, value in integer_cases:
+            with self.subTest(field=field, value=value):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    {field}: {value}\n"
+                )
+                self.assertIn("out-of-range", _codes(descriptor.validate(document)))
+
+        wrong_type = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+            "    timeoutMinutes: true\n"
+        )
+        self.assertIn("invalid-type", _codes(descriptor.validate(wrong_type)))
+
+        for field in ("rootTokenEnv", "noDataAccessTokenEnv"):
+            with self.subTest(field=field):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f'    {field}: "BAD-NAME"\n'
+                )
+                self.assertIn("invalid-value", _codes(descriptor.validate(document)))
+
+        unsafe_path = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: ../outside\n"
+        )
+        self.assertIn("invalid-path", _codes(descriptor.validate(unsafe_path)))
+
+    def test_reserved_process_and_workflow_environment_names_are_rejected(self):
+        for name in RESERVED_ENVIRONMENT_IDENTIFIERS:
+            with self.subTest(name=name):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    rootTokenEnv: {name}\n"
+                )
+                self.assertIn(
+                    "reserved-environment-identifier",
+                    _codes(descriptor.validate(document)),
+                )
+
+    def test_reserved_environment_prefixes_apply_to_every_environment_surface(self):
+        cases = {
+            "root token": "rootTokenEnv: GITHUB_CUSTOM_VALUE\n",
+            "no-data token": "noDataAccessTokenEnv: RUNNER_CUSTOM_VALUE\n",
+            "binding key": (
+                "bindings:\n"
+                "      ACTIONS_CUSTOM_VALUE:\n"
+                "        source: gateway\n"
+            ),
+            "Key Vault binding key": (
+                "keyVaultBindings:\n"
+                "      GITHUB_CUSTOM_SECRET: acceptance-secret\n"
+            ),
+        }
+
+        for label, acceptance_field in cases.items():
+            with self.subTest(label=label):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    {acceptance_field}"
+                )
+                self.assertIn(
+                    "reserved-environment-identifier",
+                    _codes(descriptor.validate(document)),
+                )
+
+    def test_non_reserved_environment_identifiers_remain_valid(self):
+        document = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+            "    rootTokenEnv: ROOT_USER_TOKEN\n"
+            "    noDataAccessTokenEnv: NO_DATA_ACCESS_TOKEN\n"
+            "    bindings:\n"
+            "      SERVICE_PATH:\n"
+            "        source: literal\n"
+            "        value: safe-value\n"
+            "    keyVaultBindings:\n"
+            "      AZURE_CLIENT_SECRET: acceptance-secret\n"
+        )
+        self.assertEqual([], descriptor.validate(document))
+
+    def test_artifact_path_is_a_safe_repository_relative_glob(self):
+        valid = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            'build:\n  artifact:\n    path: "**/target/*.jar"\n'
+        )
+        self.assertEqual([], descriptor.validate(valid))
+
+        for value in ("../target/*.jar", "/target/*.jar", '"target/*.jar;echo"'):
+            with self.subTest(value=value):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    f"build:\n  artifact:\n    path: {value}\n"
+                )
+                self.assertIn("invalid-path", _codes(descriptor.validate(document)))
 
     def test_rejects_cross_archetype_and_mismatched_settings(self):
         cases = {
@@ -390,7 +751,7 @@ class DescriptorResolutionTests(unittest.TestCase):
             self.assertEqual(
                 {
                     "descriptor_present": "true",
-                    "schema_version": "1",
+                    "schema_version": "2",
                     "archetype": "java-maven-azure",
                     "service_name": "partition",
                     "dockerfile_profile": "java",
@@ -412,6 +773,21 @@ class DescriptorResolutionTests(unittest.TestCase):
                     "python_acceptance_test_path": "",
                     "python_acceptance_runner_path": "",
                     "app_module": "",
+                    "acceptance_config": (
+                        '{"type":"maven","path":"testing/integration","runnerPath":"",'
+                        '"mavenArguments":["-pl","legal-test-azure","-am","verify",'
+                        '"-DfailIfNoTests=false","-Dtest=!Class#method,!Other#method"],'
+                        '"rootTokenEnv":"ROOT_USER_TOKEN",'
+                        '"noDataAccessTokenEnv":"NO_DATA_ACCESS_TOKEN",'
+                        '"bindings":{"LEGAL_HOST":{"source":"gateway",'
+                        '"suffix":"/api/legal/v1"},"PARTITION_ID":{"source":"literal",'
+                        '"value":"opendes"}},"keyVaultBindings":'
+                        '{"CLIENT_SECRET":"acceptance-client-secret"},"dependencies":'
+                        '{"entitlements":"/api/entitlements/v2/_ah/readiness_check"},'
+                        '"timeoutMinutes":40,"maxAttempts":3}'
+                    ),
+                    "java_maven_profiles": "core,azure",
+                    "service_target_jar": "**/target/*-spring-boot.jar",
                 },
                 config.outputs(),
             )
@@ -444,11 +820,56 @@ class DescriptorResolutionTests(unittest.TestCase):
                 ".spi/run_acceptance.py", outputs["python_acceptance_runner_path"]
             )
             self.assertEqual("wdmsworker.app:app", outputs["app_module"])
+            self.assertEqual(
+                (
+                    '{"type":"python","path":"tests/acceptance",'
+                    '"runnerPath":".spi/run_acceptance.py","mavenArguments":[],'
+                    '"rootTokenEnv":"TEST_ROOT_TOKEN","noDataAccessTokenEnv":"",'
+                    '"bindings":{"GATEWAY_URL":{"source":"gateway","suffix":"/api"},'
+                    '"STORAGE_ACCOUNT":{"source":"storageAccount"}},'
+                    '"keyVaultBindings":{"CLIENT_SECRET":"acceptance-client-secret"},'
+                    '"dependencies":{"partition":'
+                    '"/api/partition/v1/_ah/readiness_check"},'
+                    '"timeoutMinutes":25,"maxAttempts":2}'
+                ),
+                outputs["acceptance_config"],
+            )
+            self.assertEqual("", outputs["java_maven_profiles"])
+            self.assertEqual("", outputs["service_target_jar"])
             self.assertEqual([], config.warnings)
+
+    def test_java_acceptance_defaults_are_normalized(self):
+        minimal = (
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+        )
+        directory, root = _repository(minimal, markers=["pom.xml"])
+        with directory:
+            acceptance = json.loads(descriptor.resolve(root).outputs()["acceptance_config"])
+
+            self.assertEqual(
+                {
+                    "type": "maven",
+                    "path": "testing/integration",
+                    "runnerPath": "",
+                    "mavenArguments": ["verify"],
+                    "rootTokenEnv": "ROOT_USER_TOKEN",
+                    "noDataAccessTokenEnv": "",
+                    "bindings": {},
+                    "keyVaultBindings": {},
+                    "dependencies": {},
+                    "timeoutMinutes": 25,
+                    "maxAttempts": 2,
+                },
+                acceptance,
+            )
 
     def test_minimal_python_descriptor_falls_back_to_the_runtime_default(self):
         minimal = (
-            "schemaVersion: 1\n"
+            "schemaVersion: 2\n"
             "service:\n  name: demo\n  archetype: python-uv-fastapi\n"
             "container:\n  appModule: demo.app:app\n"
         )
@@ -459,6 +880,22 @@ class DescriptorResolutionTests(unittest.TestCase):
             self.assertEqual("3.12", outputs["python_runtime_version"])
             self.assertEqual("", outputs["python_test_extras"])
             self.assertEqual("demo.app:app", outputs["app_module"])
+            self.assertEqual("", outputs["acceptance_config"])
+
+    def test_schema_version_one_remains_build_compatible_but_is_deprecated(self):
+        legacy = (
+            "schemaVersion: 1\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+        )
+        directory, root = _repository(legacy, markers=["pom.xml"])
+        with directory:
+            config = descriptor.resolve(root)
+
+            self.assertTrue(config.valid)
+            self.assertEqual("1", config.outputs()["schema_version"])
+            self.assertEqual("java", config.outputs()["build_lane"])
+            self.assertEqual("", config.outputs()["acceptance_config"])
+            self.assertTrue(any("schemaVersion 1 is deprecated" in item for item in config.warnings))
 
     def test_missing_descriptor_keeps_java_inference_with_a_warning(self):
         directory, root = _repository(markers=["pom.xml"])
@@ -530,6 +967,11 @@ class ReadServiceConfigCommandTests(unittest.TestCase):
             self.assertIn("build_lane=java\n", written)
             self.assertIn("archetype=java-maven-azure\n", written)
             self.assertIn("lane_implemented=true\n", written)
+            self.assertIn("java_maven_profiles=core,azure\n", written)
+            self.assertIn(
+                "service_target_jar=**/target/*-spring-boot.jar\n", written
+            )
+            self.assertIn('acceptance_config={"type":"maven"', written)
             self.assertNotIn("run=", written)
 
     def test_exits_non_zero_for_an_invalid_descriptor(self):
@@ -576,6 +1018,27 @@ class ReadServiceConfigCommandTests(unittest.TestCase):
             self.assertIn("multi-line output", result.stderr)
             self.assertEqual("", output.read_text(encoding="utf-8") if output.exists() else "")
 
+    def test_invalid_acceptance_data_cannot_inject_an_output(self):
+        unsafe = (
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+            '    mavenArguments: ["verify build_lane=python"]\n'
+        )
+        directory, root = _repository(unsafe, markers=["pom.xml"])
+        with directory:
+            output = root / "outputs.txt"
+            result = self._run(root, "--format", "github", "--output", str(output))
+
+            self.assertEqual(1, result.returncode)
+            written = output.read_text(encoding="utf-8")
+            self.assertEqual(1, written.count("build_lane="))
+            self.assertIn("build_lane=none\n", written)
+            self.assertNotIn("build_lane=python", written)
+            self.assertIn("acceptance_config=\n", written)
+
     def test_python_outputs_are_published_for_the_workflow_contract(self):
         directory, root = _repository(PYTHON_DESCRIPTOR, markers=["pyproject.toml", "uv.lock"])
         with directory:
@@ -590,6 +1053,7 @@ class ReadServiceConfigCommandTests(unittest.TestCase):
             self.assertIn("python_runtime_version=3.12\n", written)
             self.assertIn("python_test_extras=dev\n", written)
             self.assertIn("python_runtime_extras=az\n", written)
+            self.assertIn('acceptance_config={"type":"python"', written)
 
 
 if __name__ == "__main__":

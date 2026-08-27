@@ -6,20 +6,35 @@ never overwritten by template-sync ([ADR-039](../adr/039-fork-owned-service-desc
 
 ## What it looks like
 
-A conventional Java service needs almost nothing:
+A Java service declares its build and live acceptance contract:
 
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 
 service:
   name: partition
   archetype: java-maven-azure
+
+build:
+  mavenProfiles: [core, azure]
+
+tests:
+  acceptance:
+    type: maven
+    path: partition-acceptance-test
+    mavenArguments: [verify]
+    bindings:
+      PARTITION_BASE_URL:
+        source: gateway
+        suffix: /
+      MY_TENANT:
+        source: partition
 ```
 
 A Python service records the facts the Python lane needs:
 
 ```yaml
-schemaVersion: 1
+schemaVersion: 2
 
 service:
   name: wellbore-ddms-worker
@@ -51,6 +66,13 @@ tests:
     type: python
     path: .
     runnerPath: tests/run_acceptance.py
+    timeoutMinutes: 60
+    bindings:
+      WDMS_BASE_URL:
+        source: gateway
+        suffix: /api/os-wellbore-ddms
+      WDMS_DATA_PARTITION:
+        source: partition
 
 container:
   appModule: wdmsworker.app:app
@@ -79,18 +101,16 @@ reviewed, hand-written descriptor.
 
 ## What it may never contain
 
-The descriptor is edited by ordinary pull requests, so it is restricted to closed-enum, path and
-name data. Azure identity, subscription/tenant, cluster, namespace, Deployment/container target,
-GitHub Environment, secrets, permissions, workflow or action references and arbitrary commands are
-rejected by the validator. Those values stay in repository/environment variables written by
-`spi onboard` and in Stack-side configuration.
+The descriptor is edited by ordinary pull requests, so it is restricted to closed-enum, path,
+name and structured test data. Azure identity, subscription/tenant, cluster, namespace,
+Deployment/container target, permissions, workflow/action references and secret values are
+rejected. Those values stay in repository variables and secrets written by `spi onboard`.
 
-Python live tests add two non-privileged fields: `tests.acceptance.path` is the working directory,
-and `tests.acceptance.runnerPath` is a repository-relative `.py` file. The integration action
-validates both paths, installs the committed uv lock before Azure login, and invokes the runner as
-an argv element with `TEST_REPO_ROOT` and `TEST_RESULTS_DIR`. The runner owns its test commands and
-writes JUnit XML beneath the results directory. The descriptor still cannot provide shell,
-arguments, environment variables, identities or deployment targets.
+Both lanes use `tests.acceptance`. Java declares Maven arguments as individual argv tokens;
+Python declares a repository-relative `.py` runner. Symbolic bindings such as `gateway`,
+`partition`, `entitlementDomain` and `storageAccount` are resolved against environment facts
+written by `spi onboard`. Optional Key Vault bindings may name a secret but never carry its value.
+Reserved process and GitHub Actions environment names are rejected.
 
 ## How the workflows use it
 
@@ -104,6 +124,7 @@ python_compatibility_versions  python_compatibility_matrix
 python_test_extras  python_runtime_extras  python_unit_test_path
 python_service_in_process_test_path  python_service_subprocess_test_path
 python_acceptance_test_path  python_acceptance_runner_path  app_module
+java_maven_profiles  service_target_jar  acceptance_config
 ```
 
 `build_lane` selects the statically declared language job (`🔨 Java Build` or `🐍 Python Build`)
@@ -119,9 +140,8 @@ descriptor is invalid, when it declares an archetype whose lane is not installed
 template version, or when the selected lane did not actually build.
 
 Deployment is shared because both lanes publish an immutable OCI digest. The integration action
-keeps the current Maven path for Java and selects its closed delegated-Python mode for Python. A
-Python repository is not deploy-ready until the acceptance path and runner exist; the workflow
-fails before Azure login or Deployment mutation when that contract is incomplete.
+resolves the common acceptance contract before Azure login and invokes either Maven argv or the
+Python runner. An incomplete contract fails before credentials or Deployment mutation.
 
 For `pull_request_target` runs the descriptor and its parser are restored from `origin/main`, so an
 untrusted branch can never influence a privileged run.
@@ -154,6 +174,6 @@ anchors, aliases, tags, block scalars and multiple documents are rejected by des
 
 ## Forks without a descriptor
 
-Existing forks keep working. With no descriptor and a `pom.xml` present, the workflows fall back to
-the legacy Java inference and log a warning; with no descriptor and no Maven markers the required
-check passes as it always did.
+Schema version 1 and descriptor-less Java repositories remain build-compatible, but they are not
+deploy-ready. Deploy and integration checks stay disabled until schema version 2 carries a complete
+acceptance contract and `spi onboard --verify` records a successful first canary.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -25,6 +26,10 @@ def _load_module(name: str, relative_path: str):
 validator = _load_module(
     "validate_runner_inputs",
     ".github/actions/integration-test/validate_runner_inputs.py",
+)
+resolver = _load_module(
+    "resolve_acceptance_config",
+    ".github/actions/integration-test/resolve_acceptance_config.py",
 )
 
 
@@ -136,6 +141,144 @@ class RunnerInputValidationTests(unittest.TestCase):
                 outside.unlink(missing_ok=True)
 
 
+class AcceptanceConfigResolutionTests(unittest.TestCase):
+    def test_resolves_partition_bindings_and_maven_argv(self):
+        config = {
+            "type": "maven",
+            "path": "partition-acceptance-test",
+            "runnerPath": "",
+            "mavenArguments": ["verify"],
+            "rootTokenEnv": "ROOT_USER_TOKEN",
+            "noDataAccessTokenEnv": "",
+            "bindings": {
+                "PARTITION_BASE_URL": {"source": "gateway", "suffix": "/"},
+                "MY_TENANT": {"source": "partition"},
+            },
+            "keyVaultBindings": {},
+            "dependencies": {},
+            "timeoutMinutes": 25,
+            "maxAttempts": 2,
+        }
+
+        outputs = resolver.resolve(
+            json.dumps(config),
+            {
+                "GATEWAY_URL": "https://gateway.example/",
+                "DATA_PARTITION_ID": "opendes",
+                "ENTITLEMENT_DOMAIN": "dataservices.energy",
+                "STORAGE_ACCOUNT_NAME": "storage",
+            },
+        )
+
+        self.assertEqual("maven", outputs["test_type"])
+        self.assertEqual('["verify"]', outputs["maven_arguments"])
+        self.assertEqual(
+            {
+                "MY_TENANT": "opendes",
+                "PARTITION_BASE_URL": "https://gateway.example/",
+            },
+            json.loads(outputs["env_map"]),
+        )
+
+    def test_resolves_wellbore_python_contract(self):
+        config = {
+            "type": "python",
+            "path": ".",
+            "runnerPath": "tests/integration/run_containerized_acceptance.py",
+            "mavenArguments": [],
+            "rootTokenEnv": "ROOT_USER_TOKEN",
+            "noDataAccessTokenEnv": "",
+            "bindings": {
+                "WDMS_BASE_URL": {
+                    "source": "gateway",
+                    "suffix": "/api/os-wellbore-ddms",
+                },
+                "WDMS_ACL_DOMAIN": {"source": "entitlementDomain"},
+                "WDMS_LEGAL_TAG": {"source": "partition", "suffix": "-wdms-ci"},
+                "WDMS_DATA_PARTITION": {"source": "partition"},
+            },
+            "keyVaultBindings": {},
+            "dependencies": {},
+            "timeoutMinutes": 60,
+            "maxAttempts": 2,
+        }
+
+        outputs = resolver.resolve(
+            json.dumps(config),
+            {
+                "GATEWAY_URL": "https://gateway.example",
+                "DATA_PARTITION_ID": "opendes",
+                "ENTITLEMENT_DOMAIN": "dataservices.energy",
+                "STORAGE_ACCOUNT_NAME": "storage",
+            },
+        )
+
+        self.assertEqual("python", outputs["test_type"])
+        self.assertEqual("[]", outputs["maven_arguments"])
+        self.assertEqual("60", outputs["timeout_minutes"])
+        self.assertEqual(
+            "opendes-wdms-ci",
+            json.loads(outputs["env_map"])["WDMS_LEGAL_TAG"],
+        )
+
+    def test_fails_when_a_required_environment_fact_is_missing(self):
+        config = {
+            "type": "maven",
+            "path": "testing",
+            "mavenArguments": ["verify"],
+            "bindings": {
+                "DOMAIN": {"source": "entitlementDomain"},
+            },
+        }
+
+        with self.assertRaisesRegex(ValueError, "ENTITLEMENT_DOMAIN is required"):
+            resolver.resolve(json.dumps(config), {})
+
+    def test_rejects_unsafe_or_inconsistent_contract_data(self):
+        cases = [
+            {
+                "type": "python",
+                "path": ".",
+                "runnerPath": "runner.py",
+                "mavenArguments": ["verify"],
+            },
+            {
+                "type": "maven",
+                "path": "testing",
+                "mavenArguments": ["verify"],
+                "bindings": {
+                    "URL": {"source": "gateway", "value": "https://other"},
+                },
+            },
+            {
+                "type": "maven",
+                "path": "testing",
+                "mavenArguments": ["verify"],
+                "bindings": {
+                    "GITHUB_ENV": {"source": "literal", "value": "overwrite"},
+                },
+            },
+        ]
+
+        for config in cases:
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                resolver.resolve(json.dumps(config), {"GATEWAY_URL": "https://gateway"})
+
+    def test_maven_metacharacters_remain_one_argv_token(self):
+        config = {
+            "type": "maven",
+            "path": "testing",
+            "mavenArguments": ["-Dtest=Class#method,!Other#method", "verify;rm"],
+        }
+
+        outputs = resolver.resolve(json.dumps(config), {})
+
+        self.assertEqual(
+            ["-Dtest=Class#method,!Other#method", "verify;rm"],
+            json.loads(outputs["maven_arguments"]),
+        )
+
+
 class IntegrationActionContractTests(unittest.TestCase):
     def test_python_environment_is_locked_before_azure_login(self):
         action = ACTION.read_text(encoding="utf-8")
@@ -150,11 +293,12 @@ class IntegrationActionContractTests(unittest.TestCase):
     def test_runner_mode_is_closed_and_maven_path_is_preserved(self):
         action = ACTION.read_text(encoding="utf-8")
 
-        self.assertIn("test_type:", action)
+        self.assertIn("acceptance_config:", action)
+        self.assertIn("resolve_acceptance_config.py", action)
         self.assertIn('case "$TEST_TYPE" in', action)
         self.assertIn("maven)", action)
         self.assertIn("python)", action)
-        self.assertIn('mvn "$@"', action)
+        self.assertIn('mvn --batch-mode --no-transfer-progress "${maven_args[@]}"', action)
         self.assertIn('TEST_REPO_ROOT="$GITHUB_WORKSPACE"', action)
         self.assertIn('TEST_RESULTS_DIR="$report_dir"', action)
         self.assertNotIn("eval ", action)
@@ -163,7 +307,7 @@ class IntegrationActionContractTests(unittest.TestCase):
         action = ACTION.read_text(encoding="utf-8")
 
         self.assertIn(
-            "${{ inputs.test_dir }}/.spi-integration-results/*.xml",
+            "${{ steps.contract.outputs.test_dir }}/spi-integration-results/*.xml",
             action,
         )
 

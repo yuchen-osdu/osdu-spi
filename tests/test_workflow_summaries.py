@@ -109,7 +109,7 @@ class JunitSummaryTests(unittest.TestCase):
 
     def test_aggregates_pytest_reports_from_the_fixed_results_directory(self):
         with tempfile.TemporaryDirectory() as directory:
-            report_dir = Path(directory) / ".spi-integration-results"
+            report_dir = Path(directory) / "spi-integration-results"
             report_dir.mkdir()
             (report_dir / "junit.xml").write_text(
                 '<testsuites tests="7" failures="0" errors="0" skipped="2" time="4.5"/>',
@@ -204,7 +204,9 @@ class WorkflowContractTests(unittest.TestCase):
             ROOT / ".github" / "template-workflows" / "dependabot-validation.yml"
         ).read_text(encoding="utf-8")
 
-        profile_expression = "${{ vars.MAVEN_PROFILE || 'core,azure' }}"
+        profile_expression = (
+            "${{ needs.read-service-config.outputs.java_maven_profiles || 'core,azure' }}"
+        )
         self.assertIn(f"maven_profile: {profile_expression}", workflow)
         self.assertIn(f"MAVEN_PROFILE: {profile_expression}", workflow)
         self.assertIn(f"maven_profile: {profile_expression}", dependabot_workflow)

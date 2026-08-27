@@ -405,15 +405,25 @@ jobs:
             echo "📝 No custom Maven settings found, using defaults"
           fi
 
+      - name: Resolve service configuration
+        id: service_config
+        if: steps.check_state.outputs.integration_in_process == 'false' && steps.merge_upstream.outputs.conflicts == 'false'
+        env:
+          SERVICE_NAME: ${{ vars.SERVICE_NAME || github.event.repository.name }}
+        run: |
+          python3 .github/scripts/service-config/read_service_config.py \
+            --root . \
+            --service-name "$SERVICE_NAME" \
+            --format github \
+            --output "$GITHUB_OUTPUT"
+
       - name: Validate integration
         id: validate
         if: steps.check_state.outputs.integration_in_process == 'false' && steps.merge_upstream.outputs.conflicts == 'false'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           COMMUNITY_MAVEN_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          # core is activeByDefault, so a bare profile flag would drop it; MAVEN_PROFILE
-          # overrides for services that deviate.
-          MAVEN_PROFILE: ${{ vars.MAVEN_PROFILE || 'core,azure' }}
+          MAVEN_PROFILE: ${{ steps.service_config.outputs.java_maven_profiles || 'core,azure' }}
           UPSTREAM_REPO_URL: ${{ vars.UPSTREAM_REPO_URL }}
         run: |
           echo "🔍 Running comprehensive validation checks on integration branch..."

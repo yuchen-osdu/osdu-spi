@@ -32,8 +32,9 @@
   must be sharded or flexible federation becomes generally available.
   `spi onboard` writes
   `NO_DATA_ACCESS_TESTER_CLIENT_ID`, `NO_DATA_ACCESS_TESTER_PRINCIPAL_ID`,
-  `NO_DATA_ACCESS_TESTER_IDENTITY_NAME`, and `NO_DATA_ACCESS_TOKEN_ENV` as
-  non-secret repository variables only for opted-in services.
+  and `NO_DATA_ACCESS_TESTER_IDENTITY_NAME` as non-secret repository variables
+  only for opted-in services. The token environment-variable name is
+  branch-versioned in `tests.acceptance.noDataAccessTokenEnv`.
 - The integration-test action requests a fresh GitHub OIDC assertion and logs
   the shared identity into a temporary `AZURE_CONFIG_DIR` with
   `--allow-no-subscriptions`. It mints and masks

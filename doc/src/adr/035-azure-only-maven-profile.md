@@ -10,7 +10,10 @@
 ## Decision
 
 - CI builds the Azure profile set with a hardcoded engineering-system default of **`core,azure`** — correct for nine of the ten forks and not requiring any per-fork configuration.
-- `MAVEN_PROFILE` remains a **per-service repository variable, but optional**: when set it overrides the default (the workflow passes `${{ vars.MAVEN_PROFILE || 'core,azure' }}`); when unset CI uses `core,azure`. The override exists for forks whose profile shape differs (e.g. `indexer-queue`).
+- A service records exceptional build profiles in
+  `build.mavenProfiles` in `.spi/service.yaml`; when absent CI uses
+  `core,azure`. Acceptance-test Maven arguments are declared separately under
+  `tests.acceptance`.
 - The build always passes a non-empty `-P` value; it never emits a bare `-P`. (Earlier this ADR specified "unset = no profile filter"; that is superseded — for these profile-gated poms an unfiltered build produces no provider JAR, so a real default is both simpler and more correct.)
 
 ## Consequences
@@ -19,10 +22,12 @@
   - Faster, cheaper CI (~3–5× fewer modules built) for Azure SPI service repositories.
   - Unit-test results are 100% Azure-relevant.
   - Zero per-fork configuration for the common case: nine of ten forks build correctly on the `core,azure` default with no variable set.
-  - The optional `MAVEN_PROFILE` override handles deviant forks without a template edit + sync.
+  - The descriptor override handles deviant forks without an unversioned repository variable.
 - **Negative**
   - Lost signal on whether upstream changes break other providers (AWS/IBM/GC) — acceptable since SPI does not ship those.
-  - The `core,azure` default assumes the common pom layout; a fork that deviates (e.g. `indexer-queue`) silently builds the wrong module set unless its `MAVEN_PROFILE` override is set — caught on the fork's first build.
+  - The `core,azure` default assumes the common pom layout; a fork that
+    deviates must declare `build.mavenProfiles`, which is validated on every
+    descriptor change.
 - **Neutral**
   - Cross-provider validation, when needed, is handled outside this default CI path.
 
