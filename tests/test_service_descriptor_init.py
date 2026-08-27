@@ -63,7 +63,7 @@ class DescriptorGenerationTests(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stderr)
             generated = (root / ".spi" / "service.yaml").read_text(encoding="utf-8")
-            self.assertIn("schemaVersion: 1", generated)
+            self.assertIn("schemaVersion: 2", generated)
             self.assertIn("archetype: java-maven-azure", generated)
             self.assertIn("name: partition", generated)
 
