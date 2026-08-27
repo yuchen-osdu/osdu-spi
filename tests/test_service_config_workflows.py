@@ -208,6 +208,9 @@ class ServiceConfigPreludeTests(unittest.TestCase):
             "build_lane:",
             "lane_implemented:",
             "fallback:",
+            "java_maven_profiles:",
+            "service_target_jar:",
+            "acceptance_config:",
             "python_acceptance_test_path:",
             "python_acceptance_runner_path:",
         ):
@@ -224,10 +227,12 @@ class ServiceConfigPreludeTests(unittest.TestCase):
     def test_existing_java_behaviour_is_preserved(self):
         text = _read(VALIDATE)
         build_text = _read(BUILD)
-        profile_expression = "${{ vars.MAVEN_PROFILE || 'core,azure' }}"
+        profile_expression = (
+            "${{ needs.read-service-config.outputs.java_maven_profiles || 'core,azure' }}"
+        )
         fork_upstream_profile_expression = (
             "${{ steps.filter-mode.outputs.enabled == 'true' && 'core' || "
-            "vars.MAVEN_PROFILE || 'core,azure' }}"
+            "needs.read-service-config.outputs.java_maven_profiles || 'core,azure' }}"
         )
 
         self.assertIn('name: "🔨 Java Build"', text)
@@ -418,7 +423,10 @@ class DockerLaneSelectionTests(unittest.TestCase):
                 )
                 self.assertIn("app_module: ${{ needs.read-service-config.outputs.app_module }}", block)
                 # Java behaviour is preserved: the conventional JAR path is still passed.
-                self.assertIn("jar_file: ${{ vars.SERVICE_TARGET_JAR ||", block)
+                self.assertIn(
+                    "jar_file: ${{ needs.read-service-config.outputs.service_target_jar ||",
+                    block,
+                )
 
     def test_docker_jobs_run_for_either_lane_without_breaking_the_java_gate(self):
         text = _read(VALIDATE)
@@ -488,7 +496,7 @@ class DockerLaneSelectionTests(unittest.TestCase):
         self.assertNotIn("python-build", block)
         self.assertIn("!cancelled()", block)
         self.assertIn(
-            "test_type: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'python' || 'maven' }}",
+            "acceptance_config: ${{ needs.read-service-config.outputs.acceptance_config }}",
             block,
         )
         self.assertIn(
@@ -516,25 +524,21 @@ class DockerLaneSelectionTests(unittest.TestCase):
         self.assertNotIn("needs.python-build", condition)
         self.assertNotIn("needs.python-compatibility", condition)
 
-    def test_python_deploy_fails_before_login_without_live_acceptance_metadata(self):
+    def test_descriptor_acceptance_contract_is_validated_before_azure_login(self):
         deploy = _job_block(_read(VALIDATE), "deploy-test-restore")
-        preflight = deploy.split(
-            '- name: "Validate Python live-acceptance contract"', 1
-        )[1].split("- name:", 1)[0]
+        action = _read(
+            ROOT / ".github" / "actions" / "integration-test" / "action.yml"
+        )
 
         self.assertIn(
-            "needs.read-service-config.outputs.python_acceptance_test_path",
-            preflight,
+            "acceptance_config: ${{ needs.read-service-config.outputs.acceptance_config }}",
+            deploy,
         )
-        self.assertIn(
-            "needs.read-service-config.outputs.python_acceptance_runner_path",
-            preflight,
-        )
-        self.assertIn("validate_runner_inputs.py", preflight)
-        self.assertIn("TEST_TYPE: python", preflight)
+        self.assertIn("Resolve descriptor acceptance contract", action)
+        self.assertIn("validate_runner_inputs.py", action)
         self.assertLess(
-            deploy.index("Validate Python live-acceptance contract"),
-            deploy.index("Deploy candidate to spi-stack"),
+            action.index("Resolve descriptor acceptance contract"),
+            action.index("Azure login (OIDC)"),
         )
 
     def test_deploy_and_integration_required_contexts_are_always_reporting(self):
@@ -650,14 +654,24 @@ class SettingsAndOwnershipTests(unittest.TestCase):
     def test_deploy_readiness_uses_the_onboarded_identity_variable(self):
         required = (
             "AZURE_CLIENT_ID",
-            "ACCEPTANCE_TEST_DIR",
-            "ACCEPTANCE_TEST_SECRET_MAP",
-            "ACCEPTANCE_TEST_DEPENDENCIES",
+            "AAD_CLIENT_ID",
+            "AKS_RESOURCE_GROUP",
+            "AKS_CLUSTER_NAME",
+            "K8S_NAMESPACE",
+            "FLUX_NAMESPACE",
             "K8S_DEPLOYMENT_NAME",
             "K8S_CONTAINER_NAME",
+            "GATEWAY_URL",
+            "DATA_PARTITION_ID",
+            "DEPLOY_VALIDATED",
         )
 
-        def run(script_path: Path, names: tuple[str, ...]) -> subprocess.CompletedProcess:
+        def run(
+            script_path: Path,
+            names: tuple[str, ...],
+            *,
+            deploy_validated: str = "true",
+        ) -> subprocess.CompletedProcess:
             with tempfile.TemporaryDirectory() as directory:
                 fake_bin = Path(directory)
                 fake_gh = fake_bin / "gh"
@@ -673,6 +687,18 @@ esac
                     encoding="utf-8",
                 )
                 fake_gh.chmod(0o755)
+                fake_python = fake_bin / "python3"
+                fake_python.write_text(
+                    """#!/bin/sh
+case "$*" in
+  *read_service_config.py*) printf '%s\n' "$FAKE_CONFIG_JSON" ;;
+  *generate_codeowners.py*) exit 0 ;;
+  *) exit 1 ;;
+esac
+""",
+                    encoding="utf-8",
+                )
+                fake_python.chmod(0o755)
                 runnable_script = fake_bin / script_path.name
                 runnable_script.write_text(
                     _read(script_path).replace("\r\n", "\n"),
@@ -680,11 +706,53 @@ esac
                     newline="\n",
                 )
                 variables = {
-                    "variables": [{"name": name, "value": "configured"} for name in names]
+                    "variables": [
+                        {
+                            "name": name,
+                            "value": (
+                                deploy_validated
+                                if name == "DEPLOY_VALIDATED"
+                                else "configured"
+                            ),
+                        }
+                        for name in names
+                    ]
+                }
+                acceptance = {
+                    "type": "maven",
+                    "path": "partition-acceptance-test",
+                    "runnerPath": "",
+                    "mavenArguments": ["verify"],
+                    "rootTokenEnv": "ROOT_USER_TOKEN",
+                    "noDataAccessTokenEnv": "",
+                    "bindings": {
+                        "PARTITION_BASE_URL": {
+                            "source": "gateway",
+                            "suffix": "/",
+                        },
+                        "MY_TENANT": {"source": "partition"},
+                    },
+                    "keyVaultBindings": {},
+                    "dependencies": {},
+                    "timeoutMinutes": 25,
+                    "maxAttempts": 2,
                 }
                 env = os.environ.copy()
                 env["PATH"] = f"{_posix_path(fake_bin)}{os.pathsep}{env.get('PATH', '')}"
                 env["FAKE_VARIABLES_JSON"] = json.dumps([variables])
+                env["FAKE_CONFIG_JSON"] = json.dumps(
+                    {
+                        "valid": True,
+                        "descriptor_present": "true",
+                        "schema_version": "2",
+                        "lane_implemented": "true",
+                        "archetype": "java-maven-azure",
+                        "acceptance_config": json.dumps(
+                            acceptance,
+                            separators=(",", ":"),
+                        ),
+                    }
+                )
                 env["GH_TOKEN"] = "test-token"
                 return subprocess.run(
                     ["bash", _posix_path(runnable_script), "owner/repo", "--dry-run"],
@@ -697,15 +765,34 @@ esac
 
         rules_ready = run(SETUP_RULESETS, required)
         rules_missing = run(SETUP_RULESETS, required[1:])
+        rules_unvalidated = run(
+            SETUP_RULESETS,
+            required,
+            deploy_validated="false",
+        )
         manifest_ready = run(CHECK_VARIABLES, required)
         manifest_missing = run(CHECK_VARIABLES, required[1:])
+        manifest_unvalidated = run(
+            CHECK_VARIABLES,
+            required,
+            deploy_validated="false",
+        )
 
-        for result in (rules_ready, rules_missing, manifest_ready, manifest_missing):
+        for result in (
+            rules_ready,
+            rules_missing,
+            rules_unvalidated,
+            manifest_ready,
+            manifest_missing,
+            manifest_unvalidated,
+        ):
             self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("Deploy-ready: true", rules_ready.stdout)
         self.assertIn("Deploy-ready: false", rules_missing.stdout)
+        self.assertIn("Deploy-ready: false", rules_unvalidated.stdout)
         self.assertNotIn("deploy identity `AZURE_CLIENT_ID`", manifest_ready.stdout)
         self.assertIn("deploy identity `AZURE_CLIENT_ID`", manifest_missing.stdout)
+        self.assertIn("successful first canary", manifest_unvalidated.stdout)
 
     def test_initialization_removes_template_tests_without_removing_upstream_suites(self):
         config = json.loads(_read(SYNC_CONFIG))
@@ -730,17 +817,33 @@ esac
         self.assertIn("generate_codeowners.py", script)
         self.assertIn("missing+=(\"service descriptor", script)
         self.assertIn("CODEOWNERS rule for", script)
-        self.assertIn("tests.acceptance.path", script)
-        self.assertIn("tests.acceptance.runnerPath", script)
-        self.assertIn('[[ "$build_lane" == "python" ]]', script)
+        self.assertIn("descriptor field \\`tests.acceptance\\`", script)
+        self.assertIn(".acceptance_config", script)
+        self.assertNotIn("ACCEPTANCE_TEST_DIR", script)
+        self.assertNotIn("ACCEPTANCE_TEST_SECRET_MAP", script)
 
     def test_ruleset_readiness_uses_descriptor_metadata_for_python(self):
         script = _read(SETUP_RULESETS)
 
         self.assertIn("read_service_config.py --root . --format json --redact", script)
-        self.assertIn(".python_acceptance_test_path", script)
-        self.assertIn(".python_acceptance_runner_path", script)
-        self.assertIn('[[ "$build_lane" == "python" ]]', script)
+        self.assertIn(".acceptance_config", script)
+        self.assertIn("DEPLOY_VALIDATED", script)
+        self.assertNotIn("ACCEPTANCE_TEST_DIR", script)
+
+    def test_default_ruleset_requires_transactional_deploy_and_test(self):
+        ruleset = json.loads(
+            _read(ROOT / ".github" / "rulesets" / "default-branch.json")
+        )
+        checks = {
+            item["context"]
+            for rule in ruleset["rules"]
+            if rule["type"] == "required_status_checks"
+            for item in rule["parameters"]["required_status_checks"]
+        }
+
+        self.assertIn("🐳 Docker Build", checks)
+        self.assertIn("🚀 Deploy to spi-stack", checks)
+        self.assertIn("🧪 Integration Tests", checks)
 
     def test_settings_apply_never_echoes_descriptor_or_secret_values(self):
         script = _read(CHECK_VARIABLES)

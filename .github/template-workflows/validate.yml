@@ -215,6 +215,9 @@ jobs:
       build_lane: ${{ steps.config.outputs.build_lane }}
       lane_implemented: ${{ steps.config.outputs.lane_implemented }}
       fallback: ${{ steps.config.outputs.fallback }}
+      java_maven_profiles: ${{ steps.config.outputs.java_maven_profiles }}
+      service_target_jar: ${{ steps.config.outputs.service_target_jar }}
+      acceptance_config: ${{ steps.config.outputs.acceptance_config }}
       python_runtime_version: ${{ steps.config.outputs.python_runtime_version }}
       python_compatibility_versions: ${{ steps.config.outputs.python_compatibility_versions }}
       python_compatibility_matrix: ${{ steps.config.outputs.python_compatibility_matrix }}
@@ -279,6 +282,9 @@ jobs:
               echo "build_lane=${LANE}"
               echo "lane_implemented=$([ "$LANE" = "java" ] && echo true || echo false)"
               echo "fallback=$([ "$LANE" = "java" ] && echo java-inference || echo none)"
+              echo "java_maven_profiles="
+              echo "service_target_jar="
+              echo "acceptance_config="
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -443,7 +449,7 @@ jobs:
           # core is activeByDefault, so a bare profile flag would drop it; MAVEN_PROFILE
           # overrides for services that deviate (e.g. indexer-queue). fork_upstream builds
           # core only after that fork explicitly enables ADR-042 filtering.
-          maven_profile: ${{ steps.filter-mode.outputs.enabled == 'true' && 'core' || vars.MAVEN_PROFILE || 'core,azure' }}
+          maven_profile: ${{ steps.filter-mode.outputs.enabled == 'true' && 'core' || needs.read-service-config.outputs.java_maven_profiles || 'core,azure' }}
 
   python-build:
     name: "🐍 Python Build"
@@ -638,10 +644,9 @@ jobs:
           platforms: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'linux/amd64' || '' }}
           app_module: ${{ needs.read-service-config.outputs.app_module }}
           runtime_extras: ${{ needs.read-service-config.outputs.python_runtime_extras }}
-          # Conventional JAR path; the docker-build action auto-discovers the Azure JAR when a deviant
-          # module name (e.g. entitlements-v2-azure) doesn't match, so a fresh fork needs no variable.
-          # SERVICE_NAME falls back to the repo name; SERVICE_TARGET_JAR forces a specific path (ADR-037).
-          jar_file: ${{ vars.SERVICE_TARGET_JAR || format('provider/{0}-azure/target/*-spring-boot.jar', vars.SERVICE_NAME || github.event.repository.name) }}
+          # Descriptor path or conventional Azure JAR path; the action auto-discovers one
+          # unambiguous Azure Spring Boot JAR when neither path matches.
+          jar_file: ${{ needs.read-service-config.outputs.service_target_jar || format('provider/{0}-azure/target/*-spring-boot.jar', needs.read-service-config.outputs.service_name || github.event.repository.name) }}
 
   docker-push:
     name: "📤 Build & Publish Container Image"
@@ -692,10 +697,9 @@ jobs:
           platforms: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'linux/amd64' || '' }}
           app_module: ${{ needs.read-service-config.outputs.app_module }}
           runtime_extras: ${{ needs.read-service-config.outputs.python_runtime_extras }}
-          # Conventional JAR path; the docker-build action auto-discovers the Azure JAR when a deviant
-          # module name (e.g. entitlements-v2-azure) doesn't match, so a fresh fork needs no variable.
-          # SERVICE_NAME falls back to the repo name; SERVICE_TARGET_JAR forces a specific path (ADR-037).
-          jar_file: ${{ vars.SERVICE_TARGET_JAR || format('provider/{0}-azure/target/*-spring-boot.jar', vars.SERVICE_NAME || github.event.repository.name) }}
+          # Descriptor path or conventional Azure JAR path; the action auto-discovers one
+          # unambiguous Azure Spring Boot JAR when neither path matches.
+          jar_file: ${{ needs.read-service-config.outputs.service_target_jar || format('provider/{0}-azure/target/*-spring-boot.jar', needs.read-service-config.outputs.service_name || github.event.repository.name) }}
 
   code-validation:
     name: "✅ Code Quality Checks"
@@ -970,18 +974,6 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
-      - name: "Validate Python live-acceptance contract"
-        if: needs.read-service-config.outputs.build_lane == 'python'
-        shell: bash
-        run: python .github/actions/integration-test/validate_runner_inputs.py
-        env:
-          TEST_TYPE: python
-          TEST_DIR: ${{ needs.read-service-config.outputs.python_acceptance_test_path }}
-          PYTHON_RUNNER: ${{ needs.read-service-config.outputs.python_acceptance_runner_path }}
-          PYTHON_VERSION: ${{ needs.read-service-config.outputs.python_runtime_version || '3.12' }}
-          UV_VERSION: '0.12.5'
-          PYTHON_TEST_EXTRAS: ${{ needs.read-service-config.outputs.python_test_extras }}
-
       - name: "Set up Java"
         if: needs.read-service-config.outputs.build_lane == 'java'
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5
@@ -1028,26 +1020,18 @@ jobs:
           aks_resource_group: ${{ vars.AKS_RESOURCE_GROUP }}
           aks_cluster_name: ${{ vars.AKS_CLUSTER_NAME }}
           namespace: ${{ vars.K8S_NAMESPACE }}
-          test_type: ${{ needs.read-service-config.outputs.build_lane == 'python' && 'python' || 'maven' }}
+          acceptance_config: ${{ needs.read-service-config.outputs.acceptance_config }}
           deployment_name: ${{ vars.K8S_DEPLOYMENT_NAME }}
           container_name: ${{ vars.K8S_CONTAINER_NAME }}
           gateway_url: ${{ vars.GATEWAY_URL }}
           keyvault_name: ${{ vars.KEYVAULT_NAME }}
-          test_dir: ${{ needs.read-service-config.outputs.build_lane == 'python' && needs.read-service-config.outputs.python_acceptance_test_path || vars.ACCEPTANCE_TEST_DIR }}
-          python_runner: ${{ needs.read-service-config.outputs.python_acceptance_runner_path }}
+          data_partition: ${{ vars.DATA_PARTITION_ID }}
+          entitlement_domain: ${{ vars.ENTITLEMENT_DOMAIN }}
+          storage_account_name: ${{ vars.STORAGE_ACCOUNT_NAME }}
           python_version: ${{ needs.read-service-config.outputs.python_runtime_version || '3.12' }}
           python_test_extras: ${{ needs.read-service-config.outputs.python_test_extras }}
-          secret_map: ${{ vars.ACCEPTANCE_TEST_SECRET_MAP || '{}' }}
           aad_client_id: ${{ vars.AAD_CLIENT_ID }}
           no_data_access_client_id: ${{ vars.NO_DATA_ACCESS_TESTER_CLIENT_ID }}
-          no_data_access_token_env: ${{ vars.NO_DATA_ACCESS_TOKEN_ENV || '' }}
-          env_map: ${{ vars.ACCEPTANCE_TEST_ENV_MAP || '{}' }}
-          dependencies: ${{ vars.ACCEPTANCE_TEST_DEPENDENCIES || '{}' }}
-          maven_profile: ${{ vars.MAVEN_PROFILE || '' }}
-          maven_goal: ${{ vars.MAVEN_GOAL || 'verify' }}
-          root_token_env: ${{ vars.ROOT_TOKEN_ENV || 'ROOT_USER_TOKEN' }}
-          timeout_minutes: ${{ vars.IT_TIMEOUT_MINUTES || '25' }}
-          max_attempts: ${{ vars.IT_MAX_ATTEMPTS || '2' }}
           expected_digest: ${{ steps.deploy.outputs.deployed_digest }}
 
       - name: "Restore pre-run image"

@@ -29,10 +29,10 @@ this template version, fails the required `🐳 Docker Build` check closed. Chan
 are always treated as build-relevant, so a descriptor-only pull request runs the full lane.
 
 Deployment is language-neutral: Java and Python both pass the published immutable digest to the
-same `aks-deploy` action. Integration testing keeps the shared digest guard, health probes, token
-minting and Key Vault mapping, then selects Maven for Java or a descriptor-declared Python runner
-for Python. The Python action installs `uv.lock` before Azure login and invokes the reviewed runner
-without shell evaluation.
+same `aks-deploy` action. Integration testing resolves the descriptor-owned acceptance contract
+before Azure login, binds named Stack environment facts, then invokes either a validated Maven argv
+array or a descriptor-declared Python runner. The Python action installs `uv.lock` before Azure
+login and invokes the reviewed runner without shell evaluation.
 
 ### Code Quality Validation
 The system verifies that your code is functional and maintainable by running build verification to ensure code compiles and all dependencies resolve correctly, executing the full test suite and generating coverage reports, and performing lint checks to enforce consistent code style and formatting standards.
@@ -120,7 +120,7 @@ The workflow runs these validation jobs:
 | Job | Purpose | What It Checks |
 |-----|---------|----------------|
 | **Initialization Check** | Verifies repository setup | Branches plus a service shape: descriptor, `pom.xml`, or `pyproject.toml` + `uv.lock` |
-| **Read Service Config** | Resolves the descriptor | Archetype, build lane, image profile, Python runtime/extras/app module |
+| **Read Service Config** | Resolves the descriptor | Archetype, build lane, image profile, build selectors and normalized acceptance contract |
 | **Repository State** | Detects project type | Identifies Java (`pom.xml`) and Python (`pyproject.toml` + `uv.lock`) repositories |
 | **Java Build** | Compiles and tests | Maven build, unit tests, dependency resolution |
 | **Python Build** | Syncs, lints and tests | Locked `uv sync`, ruff/mypy, pytest suites, runtime import smoke |

@@ -21,9 +21,9 @@ ADR-036 and ADR-037.
 - Initialization captures only `UPSTREAM_REPO_URL`. ADR-003 described a project-type configuration
   parameter that was never implemented, so language and build shape are re-derived at run time
   instead of being recorded once and reviewed.
-- Service-specific knowledge is scattered across runtime inference, hardcoded defaults, repository
-  variables (`SERVICE_NAME`, `MAVEN_PROFILE`, `SERVICE_TARGET_JAR`), onboarding variables and
-  copied files. None of it is versioned, schema-checked or visible in normal source review.
+- Service-specific knowledge was scattered across runtime inference, hardcoded
+  defaults, repository variables and copied files. None of it was versioned,
+  schema-checked or visible in normal source review.
 - Template-sync force-replaces `.github/actions/**`, copied `.github/workflows/**`, `build/**`,
   rulesets and settings scripts (ADR-011, ADR-012). Any service-specific configuration placed in
   those paths is overwritten, so persistent service metadata needs a declared service-owned path.
@@ -60,8 +60,8 @@ Ownership tiers:
 
 ### 2. Closed schema, fail closed
 
-`.github/scripts/service-config/schema.json` defines schema version 1 with closed enums and no
-additional keys. `descriptor.py` parses a deliberately small YAML subset with the Python standard
+`.github/scripts/service-config/schema.json` defines the supported schema versions with closed
+enums and no undeclared keys. `descriptor.py` parses a deliberately small YAML subset with the Python standard
 library only — GitHub runners guarantee `python3` but not PyYAML or `yq`, and a checked-in parser
 keeps parsing deterministic and reviewable. Anchors, aliases, tags, block scalars, multiple
 documents, tabs and nulls are rejected.
@@ -95,16 +95,14 @@ unit_test_type      has_coverage    build_lane    lane_implemented  fallback
 python_runtime_version  python_distribution  python_import_package
 python_test_extras      python_runtime_extras
 python_acceptance_test_path  python_acceptance_runner_path  app_module
+java_maven_profiles  service_target_jar  acceptance_config
 ```
 
-Job outputs never carry shell commands. The Python acceptance runner is a validated
-repository-relative `.py` path, invoked as an argv element with a fixed JUnit argument rather
-than evaluated as command text. Language lanes are statically declared and gated on
-`build_lane`. The Java lane keeps its name, its action, and `vars.MAVEN_PROFILE` handling. The
-Python outputs are the `python-build` action's inputs and the canonical Python image's build
-arguments, so a service parameterises its build by editing the reviewed descriptor rather than the
-copied workflow. `container.appModule` uses a narrow `<dotted.module>:<attribute>` pattern because
-it becomes a container entrypoint value.
+Job outputs never carry shell commands. Python runners are validated repository-relative `.py`
+paths. Java acceptance arguments are emitted as a JSON argv array and passed to Maven without
+shell evaluation. `acceptance_config` contains only the normalized, schema-constrained test
+contract; the integration action resolves symbolic bindings against Stack facts written by
+`spi onboard`.
 
 ### 5. Stable required check that fails closed
 
@@ -130,9 +128,10 @@ obtain a green required check by being classified as configuration.
 Unprivileged build/test work may read the descriptor from the pull-request tree. For
 `pull_request_target` the prelude restores `.spi/` and `.github/scripts/service-config/` from
 `origin/main` before resolving, mirroring the existing trusted-actions and `build/` restore. The
-descriptor may never select identity, environment, cluster, namespace, Deployment/container target,
-secrets, permissions, workflow/action references or arbitrary commands; those remain repository or
-environment configuration written by `spi onboard` and the Stack.
+descriptor may never select identity, cluster, namespace, Deployment/container target,
+permissions, workflow/action references or secret values. It may name test environment variables,
+named Stack-fact sources and optional Key Vault secret names. Actual environment values remain
+repository configuration written by `spi onboard` and the Stack.
 
 `/.spi/` is protected by CODEOWNERS. Because the reviewing team differs per organization and an
 unknown owner silently disables `require_code_owner_review`, initialization seeds an *active* rule
