@@ -237,11 +237,6 @@ class AcceptanceConfigResolutionTests(unittest.TestCase):
     def test_rejects_unsafe_or_inconsistent_contract_data(self):
         cases = [
             {
-                "type": "maven",
-                "path": "testing",
-                "mavenArguments": ["verify;rm"],
-            },
-            {
                 "type": "python",
                 "path": ".",
                 "runnerPath": "runner.py",
@@ -268,6 +263,20 @@ class AcceptanceConfigResolutionTests(unittest.TestCase):
         for config in cases:
             with self.subTest(config=config), self.assertRaises(ValueError):
                 resolver.resolve(json.dumps(config), {"GATEWAY_URL": "https://gateway"})
+
+    def test_maven_metacharacters_remain_one_argv_token(self):
+        config = {
+            "type": "maven",
+            "path": "testing",
+            "mavenArguments": ["-Dtest=Class#method,!Other#method", "verify;rm"],
+        }
+
+        outputs = resolver.resolve(json.dumps(config), {})
+
+        self.assertEqual(
+            ["-Dtest=Class#method,!Other#method", "verify;rm"],
+            json.loads(outputs["maven_arguments"]),
+        )
 
 
 class IntegrationActionContractTests(unittest.TestCase):

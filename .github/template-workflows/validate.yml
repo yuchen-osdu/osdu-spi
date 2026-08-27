@@ -974,6 +974,41 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd  # v5
 
+      - name: "Resolve descriptor acceptance contract"
+        id: acceptance_contract
+        shell: bash
+        run: python .github/actions/integration-test/resolve_acceptance_config.py
+        env:
+          ACCEPTANCE_CONFIG: ${{ needs.read-service-config.outputs.acceptance_config }}
+          GATEWAY_URL: ${{ vars.GATEWAY_URL }}
+          DATA_PARTITION_ID: ${{ vars.DATA_PARTITION_ID }}
+          ENTITLEMENT_DOMAIN: ${{ vars.ENTITLEMENT_DOMAIN }}
+          STORAGE_ACCOUNT_NAME: ${{ vars.STORAGE_ACCOUNT_NAME }}
+
+      - name: "Validate acceptance runner and environment bindings"
+        shell: bash
+        run: |
+          python .github/actions/integration-test/validate_runner_inputs.py
+          if [ "$SECRET_MAP" != "{}" ] && [ -z "$KEYVAULT_NAME" ]; then
+            echo "::error::Descriptor keyVaultBindings require KEYVAULT_NAME from spi onboard."
+            exit 1
+          fi
+          if [ -n "$NO_DATA_ACCESS_TOKEN_ENV" ] && [ -z "$NO_DATA_ACCESS_CLIENT_ID" ]; then
+            echo "::error::Descriptor noDataAccessTokenEnv requires the onboarded no-data identity."
+            exit 1
+          fi
+        env:
+          TEST_TYPE: ${{ steps.acceptance_contract.outputs.test_type }}
+          TEST_DIR: ${{ steps.acceptance_contract.outputs.test_dir }}
+          PYTHON_RUNNER: ${{ steps.acceptance_contract.outputs.python_runner }}
+          PYTHON_VERSION: ${{ needs.read-service-config.outputs.python_runtime_version || '3.12' }}
+          UV_VERSION: '0.12.5'
+          PYTHON_TEST_EXTRAS: ${{ needs.read-service-config.outputs.python_test_extras }}
+          SECRET_MAP: ${{ steps.acceptance_contract.outputs.secret_map }}
+          KEYVAULT_NAME: ${{ vars.KEYVAULT_NAME }}
+          NO_DATA_ACCESS_TOKEN_ENV: ${{ steps.acceptance_contract.outputs.no_data_access_token_env }}
+          NO_DATA_ACCESS_CLIENT_ID: ${{ vars.NO_DATA_ACCESS_TESTER_CLIENT_ID }}
+
       - name: "Set up Java"
         if: needs.read-service-config.outputs.build_lane == 'java'
         uses: actions/setup-java@be666c2fcd27ec809703dec50e508c2fdc7f6654  # v5

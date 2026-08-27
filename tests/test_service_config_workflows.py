@@ -534,6 +534,12 @@ class DockerLaneSelectionTests(unittest.TestCase):
             "acceptance_config: ${{ needs.read-service-config.outputs.acceptance_config }}",
             deploy,
         )
+        self.assertIn("Resolve descriptor acceptance contract", deploy)
+        self.assertIn("Validate acceptance runner and environment bindings", deploy)
+        self.assertLess(
+            deploy.index("Resolve descriptor acceptance contract"),
+            deploy.index("Deploy candidate to spi-stack"),
+        )
         self.assertIn("Resolve descriptor acceptance contract", action)
         self.assertIn("validate_runner_inputs.py", action)
         self.assertLess(

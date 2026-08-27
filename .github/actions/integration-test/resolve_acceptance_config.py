@@ -11,11 +11,11 @@ from pathlib import Path
 from typing import Any
 
 
-ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
+ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 SERVICE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 SECRET_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,126}$")
 HEALTH_PATH_RE = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*$")
-MAVEN_ARG_RE = re.compile(r"^[A-Za-z0-9._:/,=+@!#*%${}-]{1,300}$")
+MAVEN_ARG_RE = re.compile(r"^[^\s\x00-\x1f\x7f]{1,240}$")
 
 EXPECTED_KEYS = {
     "type",
