@@ -48,7 +48,9 @@ Job outputs never carry shell commands or secret values. Maven arguments remain 
 and a Python acceptance runner remains a schema-validated repository-relative `.py` path. Binding
 and Key Vault maps contain environment variable names, approved runtime sources, and Key Vault
 secret *names* only. Consumers must decode the JSON and invoke tools directly, never evaluate
-descriptor text as shell.
+descriptor text as shell. Environment identifiers cannot replace protected process, GitHub
+Actions, runner, OIDC, Azure identity, language-tooling or shell variables; all `GITHUB_`,
+`RUNNER_` and `ACTIONS_` names are reserved.
 
 ## Schema version 2 examples
 

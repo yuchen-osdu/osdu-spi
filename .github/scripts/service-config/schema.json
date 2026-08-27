@@ -3,6 +3,32 @@
   "schemaVersion": 2,
   "supportedSchemaVersions": [2],
   "deprecatedSchemaVersions": [1],
+  "reservedEnvironmentIdentifiers": [
+    "PATH",
+    "HOME",
+    "SHELL",
+    "PWD",
+    "OLDPWD",
+    "BASH_ENV",
+    "ENV",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "JAVA_TOOL_OPTIONS",
+    "MAVEN_OPTS",
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_PATH",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_TOKEN",
+    "AZURE_CLIENT_ID",
+    "AZURE_TENANT_ID",
+    "AZURE_SUBSCRIPTION_ID",
+    "AZURE_FEDERATED_TOKEN_FILE",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
+  ],
+  "reservedEnvironmentPrefixes": ["GITHUB_", "RUNNER_", "ACTIONS_"],
   "archetypes": {
     "java-maven-azure": {
       "description": "Conventional OSDU Java service built with Maven and the Azure provider profile set.",
@@ -201,6 +227,11 @@
     }
   },
   "definitions": {
+    "environmentIdentifier": {
+      "type": "string",
+      "environmentIdentifier": true,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+    },
     "unitTestSuite": {
       "type": "mapping",
       "properties": {
@@ -264,17 +295,16 @@
           }
         },
         "rootTokenEnv": {
-          "type": "string",
-          "default": "ROOT_USER_TOKEN",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          "$ref": "environmentIdentifier",
+          "default": "ROOT_USER_TOKEN"
         },
         "noDataAccessTokenEnv": {
-          "type": "string",
-          "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"
+          "$ref": "environmentIdentifier"
         },
         "bindings": {
           "type": "mapping",
           "keyPattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+          "keyEnvironmentIdentifier": true,
           "additionalProperties": {
             "type": "mapping",
             "properties": {
@@ -300,6 +330,7 @@
           "$comment": "Maps an environment variable to an Azure Key Vault secret name. Secret values are never represented in the descriptor.",
           "type": "mapping",
           "keyPattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$",
+          "keyEnvironmentIdentifier": true,
           "additionalProperties": {
             "type": "string",
             "maxLength": 127,

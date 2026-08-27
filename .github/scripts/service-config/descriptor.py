@@ -442,6 +442,7 @@ def _validate_mapping(
     errors: List[ValidationError],
     key_pattern: Optional[str] = None,
     additional_rule: Optional[Dict[str, Any]] = None,
+    key_environment_identifier: bool = False,
 ) -> None:
     if not isinstance(node, dict):
         errors.append(ValidationError(path or "<root>", "invalid-type", "expected a mapping"))
@@ -464,6 +465,14 @@ def _validate_mapping(
                         child_path,
                         "invalid-key",
                         f"mapping key '{key}' does not match {key_pattern}",
+                    )
+                )
+            if key_environment_identifier and _is_reserved_environment_identifier(key, schema):
+                errors.append(
+                    ValidationError(
+                        child_path,
+                        "reserved-environment-identifier",
+                        "environment identifier is reserved by the process or workflow runtime",
                     )
                 )
             rule = additional_rule
@@ -498,6 +507,12 @@ def _resolve_ref(rule: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]
     return resolved
 
 
+def _is_reserved_environment_identifier(value: str, schema: Dict[str, Any]) -> bool:
+    reserved = schema.get("reservedEnvironmentIdentifiers", [])
+    prefixes = schema.get("reservedEnvironmentPrefixes", [])
+    return value in reserved or any(value.startswith(prefix) for prefix in prefixes)
+
+
 def _validate_value(
     value: Any,
     rule: Dict[str, Any],
@@ -518,6 +533,7 @@ def _validate_value(
             errors,
             key_pattern=rule.get("keyPattern"),
             additional_rule=rule.get("additionalProperties"),
+            key_environment_identifier=rule.get("keyEnvironmentIdentifier", False),
         )
         return
 
@@ -612,6 +628,16 @@ def _validate_value(
         if not isinstance(value, str):
             errors.append(ValidationError(path, "invalid-type", "expected a string"))
             return
+        if rule.get("environmentIdentifier") and _is_reserved_environment_identifier(
+            value, schema
+        ):
+            errors.append(
+                ValidationError(
+                    path,
+                    "reserved-environment-identifier",
+                    "environment identifier is reserved by the process or workflow runtime",
+                )
+            )
         if "enum" in rule and value not in rule["enum"]:
             errors.append(
                 ValidationError(

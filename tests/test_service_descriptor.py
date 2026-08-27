@@ -120,6 +120,32 @@ container:
   appModule: wdmsworker.app:app
 """
 
+RESERVED_ENVIRONMENT_IDENTIFIERS = (
+    "PATH",
+    "HOME",
+    "SHELL",
+    "PWD",
+    "OLDPWD",
+    "BASH_ENV",
+    "ENV",
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "PYTHONPATH",
+    "JAVA_TOOL_OPTIONS",
+    "MAVEN_OPTS",
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_PATH",
+    "GITHUB_STEP_SUMMARY",
+    "GITHUB_TOKEN",
+    "AZURE_CLIENT_ID",
+    "AZURE_TENANT_ID",
+    "AZURE_SUBSCRIPTION_ID",
+    "AZURE_FEDERATED_TOKEN_FILE",
+    "ACTIONS_ID_TOKEN_REQUEST_URL",
+    "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+)
+
 
 def _repository(descriptor_text: str = "", markers=()):
     directory = tempfile.TemporaryDirectory()
@@ -482,6 +508,70 @@ class DescriptorValidationTests(unittest.TestCase):
             "    path: ../outside\n"
         )
         self.assertIn("invalid-path", _codes(descriptor.validate(unsafe_path)))
+
+    def test_reserved_process_and_workflow_environment_names_are_rejected(self):
+        for name in RESERVED_ENVIRONMENT_IDENTIFIERS:
+            with self.subTest(name=name):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    rootTokenEnv: {name}\n"
+                )
+                self.assertIn(
+                    "reserved-environment-identifier",
+                    _codes(descriptor.validate(document)),
+                )
+
+    def test_reserved_environment_prefixes_apply_to_every_environment_surface(self):
+        cases = {
+            "root token": "rootTokenEnv: GITHUB_CUSTOM_VALUE\n",
+            "no-data token": "noDataAccessTokenEnv: RUNNER_CUSTOM_VALUE\n",
+            "binding key": (
+                "bindings:\n"
+                "      ACTIONS_CUSTOM_VALUE:\n"
+                "        source: gateway\n"
+            ),
+            "Key Vault binding key": (
+                "keyVaultBindings:\n"
+                "      GITHUB_CUSTOM_SECRET: acceptance-secret\n"
+            ),
+        }
+
+        for label, acceptance_field in cases.items():
+            with self.subTest(label=label):
+                document = descriptor.parse(
+                    "schemaVersion: 2\n"
+                    "service:\n  name: demo\n  archetype: java-maven-azure\n"
+                    "tests:\n  acceptance:\n"
+                    "    type: maven\n"
+                    "    path: testing/integration\n"
+                    f"    {acceptance_field}"
+                )
+                self.assertIn(
+                    "reserved-environment-identifier",
+                    _codes(descriptor.validate(document)),
+                )
+
+    def test_non_reserved_environment_identifiers_remain_valid(self):
+        document = descriptor.parse(
+            "schemaVersion: 2\n"
+            "service:\n  name: demo\n  archetype: java-maven-azure\n"
+            "tests:\n  acceptance:\n"
+            "    type: maven\n"
+            "    path: testing/integration\n"
+            "    rootTokenEnv: ROOT_USER_TOKEN\n"
+            "    noDataAccessTokenEnv: NO_DATA_ACCESS_TOKEN\n"
+            "    bindings:\n"
+            "      SERVICE_PATH:\n"
+            "        source: literal\n"
+            "        value: safe-value\n"
+            "    keyVaultBindings:\n"
+            "      AZURE_CLIENT_SECRET: acceptance-secret\n"
+        )
+        self.assertEqual([], descriptor.validate(document))
 
     def test_artifact_path_is_a_safe_repository_relative_glob(self):
         valid = descriptor.parse(
