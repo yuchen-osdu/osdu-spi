@@ -1,58 +1,24 @@
-# ADR-038: Defer Extra-File Dockerfile Support for Core Service Onboarding
+# ADR-038: Defer Generic Java Image Extra Files
 
 ## Context
 
-- ADR-037 established that the engineering system owns a single canonical service Dockerfile at `build/Dockerfile`, synced into service forks. Service forks do not supply their own CI Dockerfile.
-- The immediate SPI onboarding target is the 10 core service set used by the shared SPI Stack deploy loop: `partition`, `entitlements`, `legal`, `schema`, `file`, `storage`, `indexer`, `indexer-queue`, `search`, and `workflow`.
-- Official Azure SPI currently has only one service fork, `Azure/osdu-spi-partition`. SPI Stack already deploys the 10 core services plus three reference services, `crs-catalog`, `crs-conversion`, and `unit`, from community images through `osdu-image-lock`.
-- ADME's shared `oep-deployment-resources` build system has an alternate `DockerfileForExtraFiles` with an `OPTIONAL_FILES` build argument. That mechanism copies extra runtime files into the image with `COPY ${OPTIONAL_FILES} ${OPTIONAL_FILES}`.
-- ADME Partition and Entitlements do not use `OPTIONAL_FILES`. ADME usage was found only in the reference services:
-  - `OSDU-Crs-Catalog-Service`: `data/crs_catalog_v2.json`
-  - `OSDU-Crs-Conversion-Service`: `apachesis_setup`
-  - `OSDU-Unit-Service`: `data/unit_catalog_v2.json`
-- A raw `OPTIONAL_FILES` passthrough has a sharp edge: the ADME Dockerfile warns that an empty value can copy the entire Docker context. SPI's GitHub Actions path should not add that footgun without a concrete service requirement and path validation.
+The canonical Java image copies a built JAR and engineering-system runtime files. Reference services that need additional repository files at runtime do not fit this contract, and a generic Docker build argument can expand an empty or broad path and copy unintended build-context content.
+
+The Python lane is not the same case. It installs the project from source, and runtime package data belongs in the Python distribution.
 
 ## Decision
 
-Do not change the SPI canonical Dockerfile or `docker-build` action for the 10 core service onboarding wave.
+The Java descriptor and Docker action do not expose a generic extra-file input. A Java service that requires auxiliary runtime files cannot use the canonical image until the engineering system defines and tests a specific contract.
 
-Do not add ADME-style raw `OPTIONAL_FILES` support now. The current `build/Dockerfile` plus `JAR_FILE` resolution remains sufficient for the 10 core services.
+Any later contract must accept repository-relative, non-empty paths; reject absolute paths and parent traversal; verify every source exists inside the build context; and copy only the declared files. It must remain engineering-system-owned rather than selecting a service Dockerfile.
 
-If SPI later onboards reference services that need extra runtime files, introduce a separate, explicit, validated mechanism such as `SERVICE_EXTRA_FILES`, rather than a raw Docker build-arg passthrough. That future mechanism must validate that paths are relative, non-empty, present in the build context, and cannot use parent traversal or absolute paths.
-
-## Rationale
-
-- The current onboarding scope does not require extra files. Partition and Entitlements were checked directly, and neither ADME service uses `OPTIONAL_FILES`.
-- The ADME services that need extra files map to SPI Stack's reference-service set, not Daniel's immediate 10 core service set.
-- Keeping the Dockerfile unchanged avoids delaying core service onboarding for a capability that is not required by the core services.
-- Deferring extra-file support preserves the security and simplicity of the current Docker build contract: the build job produces a JAR, and the image build copies only that JAR plus centrally managed runtime files.
-- A future reference-service implementation can be designed with safe input validation instead of inheriting ADME's raw `OPTIONAL_FILES` behavior.
+- **Rejected alternative: pass ADME-style `OPTIONAL_FILES` directly to Docker.** It supports known reference-service layouts, but an empty or broad expansion can copy unintended context.
+- **Rejected alternative: allow an arbitrary service Dockerfile for exceptions.** It unblocks unusual services, but it bypasses the ownership and patching guarantees in [ADR-037](037-engineering-system-owns-service-dockerfile.md).
+- **Rejected alternative: copy the complete repository into the Java image.** It avoids path configuration, but it increases image content and can include source, metadata, or credentials that the runtime does not need.
 
 ## Consequences
 
-### Positive
-
-- The 10 core services can onboard with the existing canonical Dockerfile.
-- No extra per-service Dockerfile override or build argument is required for core services.
-- The Docker build contract stays small and auditable.
-- Future reference-service work can add extra-file support deliberately, with validation and tests.
-
-### Negative
-
-- `crs-catalog`, `crs-conversion`, and `unit` cannot yet be built by SPI if their runtime image requires the same extra files ADME bakes into those images.
-- A later reference-service onboarding wave will need a small design and implementation step before those services can use SPI-built images.
-
-### Neutral
-
-- SPI Stack can continue deploying reference services from community images through `osdu-image-lock` until SPI-built images for reference services are explicitly in scope.
-- ADME's `DockerfileForExtraFiles` remains useful evidence for future reference-service support, but it is not copied into SPI as-is.
-
-## Alternatives Considered
-
-- **Add raw `OPTIONAL_FILES` support now**: rejected because it is not needed for the 10 core services and can accidentally copy too much of the Docker context if empty or misconfigured.
-- **Copy ADME `DockerfileForExtraFiles` into SPI**: rejected because SPI should keep one canonical Dockerfile and avoid ADME-specific production pipeline assumptions.
-- **Service-owned Dockerfiles for services needing extras**: rejected for now because ADR-037 intentionally centralizes Dockerfile ownership to avoid per-fork drift. If reference services need extras, the centralized action/Dockerfile should support them safely.
-
----
-
-[← ADR-037](037-engineering-system-owns-service-dockerfile.md) | :material-arrow-up: [Catalog](index.md) | [ADR-039 →](039-fork-owned-service-descriptor.md)
+- Java image inputs remain limited to the validated JAR and canonical runtime assets.
+- Core Java services that need no auxiliary files require no additional image configuration.
+- Reference services that depend on external runtime files remain unsupported until a bounded contract exists.
+- Python package data continues through normal locked source packaging rather than a Java extra-file mechanism.

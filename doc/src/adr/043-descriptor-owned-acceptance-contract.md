@@ -1,80 +1,29 @@
 # ADR-043: Descriptor-Owned Acceptance Contract
 
-## Status
-
-Accepted.
-
 ## Context
 
-Live acceptance behavior was split between `.spi/service.yaml` and repository
-variables. Python already declared its working directory and runner in the
-descriptor, while Java used `ACCEPTANCE_TEST_DIR` and a free-form
-`MAVEN_GOAL`. Both lanes depended on JSON-valued variables for environment
-injection, dependency probes and Key Vault bindings.
-
-Those variables were not versioned with service code, could not vary by branch,
-and routinely drifted when a Stack environment was re-homed. In particular,
-absolute gateway URLs remained pointed at retired ingress hosts. The free-form
-Maven string also mixed goals, modules, profiles, properties and exclusions in
-one shell-split value.
-
-Azure identity, cluster coordinates, Deployment targets and secret values are
-different: they identify a privileged environment and must not become
-pull-request-controlled service metadata.
+Acceptance behavior was split between service descriptors, free-form Maven strings, and JSON repository variables. Those values were not branch-versioned and retained environment-specific URLs after a Stack move. Azure identity, cluster coordinates, Deployment targets, and secret values still require a privileged configuration boundary.
 
 ## Decision
 
-Schema version 2 makes `tests.acceptance` the complete, branch-versioned test
-contract for both Java and Python services.
+Schema version 2 makes `tests.acceptance` the Java and Python acceptance contract. It declares the suite type, working directory, Python runner, Maven argument tokens, token environment names, bounded timeout and retry values, dependency health paths, named Stack-fact bindings, literal non-secret bindings, and optional environment-variable-to-Key-Vault-secret-name bindings.
 
-The descriptor owns:
+The descriptor parser emits deterministic `acceptance_config` JSON. The integration action validates it again and resolves named facts from repository variables written by `spi onboard`: gateway URL, data partition, entitlement domain, and storage account. Maven arguments remain an array and are passed as argv. Python runners are validated repository-relative `.py` paths.
 
-- acceptance type, working directory and Python runner;
-- Maven argv tokens, Java build profiles and an optional target JAR path;
-- token environment-variable names;
-- bounded timeout and retry policy;
-- dependency health paths;
-- non-secret bindings from named Stack facts;
-- optional environment-variable to Key Vault secret-name bindings.
+The descriptor is permitted to name a Key Vault secret but cannot contain its value. It cannot select Azure identity, subscription, cluster, namespace, Deployment, container, Flux namespace, workflow permissions, or action references. Reserved process and GitHub Actions environment identifiers are rejected.
 
-The parser emits one deterministic `acceptance_config` JSON object. The
-integration action resolves its bindings against environment facts written by
-`spi onboard`: gateway URL, data partition, Entitlements domain and primary
-storage account. Maven arguments remain an array and are passed to `mvn` as
-argv; they are never evaluated or shell-split from one command string.
+`spi onboard --verify` supplies the privileged environment contract and performs the first transactional canary. Rulesets require the stable deploy and integration checks only when the descriptor has an acceptance contract, all referenced environment bindings exist, and `DEPLOY_VALIDATED=true`. A forced manual full-pipeline run provides the bootstrap path before that marker is set.
 
-The descriptor may name a Key Vault secret but may never contain a secret
-value. It may not select Azure identity, subscription, cluster, namespace,
-Deployment, container, Flux namespace, gateway, Key Vault or any workflow
-permission/action. Reserved process and GitHub Actions environment names are
-rejected.
+Schema version 1 remains readable for build compatibility but is not deploy-ready.
 
-Repository rules require the stable deploy and integration summary checks only
-after:
-
-1. the descriptor contains a valid acceptance contract;
-2. `spi onboard` has written every required environment binding; and
-3. the first transactional canary has succeeded and set
-   `DEPLOY_VALIDATED=true`.
-
-Schema version 1 remains readable for build compatibility but does not describe
-a deploy-ready service.
+- **Rejected alternative: keep acceptance configuration in repository variables.** Variables are easy to rehome, but they are not branch-versioned and cannot be reviewed with test changes.
+- **Rejected alternative: keep one free-form Maven command string.** It is compact and familiar, but shell splitting mixes goals, profiles, properties, and exclusions without a closed data contract.
+- **Rejected alternative: place environment credentials or secret values in the descriptor.** It would make each branch self-contained, but pull requests would control privileged Stack access.
 
 ## Consequences
 
-- Test behavior changes with the branch and is reviewed beside service code.
-- Re-homing changes environment variables once; descriptor bindings follow the
-  new environment without source edits.
-- Java and Python use one acceptance contract and one integration action.
-- A malformed or incomplete contract fails before Azure login or cluster
-  mutation.
-- Environment onboarding remains privileged and operator-approved.
-- Existing test variables are removed after service descriptors move to schema
-  version 2.
-
-## Related Decisions
-
-- [ADR-034: Federated Identity for Actions to Azure](034-federated-identity-actions-to-azure.md)
-- [ADR-036: Workflow Trust Boundaries for CI/CD](036-workflow-trust-boundaries.md)
-- [ADR-039: Fork-Owned Service Descriptor](039-fork-owned-service-descriptor.md)
-- [ADR-041: Transactional Candidate Validation](041-transactional-candidate-validation.md)
+- Acceptance changes are reviewed and validated with the branch that uses them.
+- Java and Python resolve one normalized contract through the same integration action.
+- Rehoming changes Stack facts without rewriting service test metadata.
+- Invalid contracts fail before Azure login or Deployment mutation.
+- Deploy readiness depends on both service-owned descriptor data and operator-owned environment configuration.

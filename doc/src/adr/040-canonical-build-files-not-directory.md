@@ -1,19 +1,12 @@
-# ADR-040: Sync Canonical Build Files Without Owning the Directory
-
-## Status
-
-Accepted.
+# ADR-040: Sync Canonical Build Files Individually
 
 ## Context
 
-ADR-037 made the engineering system responsible for canonical Java and Python
-Dockerfiles. The initial sync rule owned the whole `build/` directory. Some
-upstream services keep other active build tooling beside those Dockerfiles,
-and directory replacement deleted those service-owned files.
+The engineering system owns canonical Java and Python image files, while service-owned scripts and metadata also occupy `build/`. Replacing the directory would delete those service-owned files.
 
 ## Decision
 
-Synchronize the five canonical build files individually:
+Template sync copies these files individually:
 
 - `build/Dockerfile`
 - `build/docker-entrypoint.sh`
@@ -21,12 +14,13 @@ Synchronize the five canonical build files individually:
 - `build/python/Dockerfile.dockerignore`
 - `build/python/docker-entrypoint.sh`
 
-Do not treat the enclosing `build/` directory as template-owned.
+The enclosing `build/` directory remains shared rather than template-owned.
+
+- **Rejected alternative: synchronize the complete `build/` directory.** It is simpler to configure and automatically includes new canonical files, but it deletes unrelated service-owned content.
+- **Rejected alternative: stop synchronizing canonical image files.** It preserves full service ownership, but security and runtime fixes would drift across forks.
 
 ## Consequences
 
-- Canonical image recipes still receive every central security and runtime
-  update.
-- Service-owned scripts and metadata beside those recipes survive
-  initialization and template sync.
-- Adding another canonical build file requires an explicit sync-config entry.
+- Canonical image assets receive central updates without taking ownership of neighboring files.
+- Adding or removing a canonical asset requires an explicit sync-config change.
+- Service repositories retain additional build tooling beside the canonical files.

@@ -1,6 +1,6 @@
 # Architecture Decision Records
 
-This catalog documents the architectural choices that shape the OSDU SPI Fork Management system. Each ADR captures the context, rationale, and consequences of significant design choices that enable automated management of long-lived upstream forks.
+This catalog documents the architectural choices that shape the OSDU SPI Fork Management system. Each ADR captures the context, decision, rejected alternatives, and consequences.
 
 !!! info "Impact Levels"
     **:material-star: Critical** - Fundamental to system operation; changes require careful migration planning
@@ -51,7 +51,7 @@ Decisions for synchronizing with upstream repositories and integrating changes:
 | [021](021-pull-request-target-trigger-pattern.md) | **Pull Request Target Pattern** | :material-minus: Medium |
 | [023](023-meta-commit-strategy-for-release-please.md) | **Meta Commit Strategy** | :material-trending-up: High |
 | [024](024-sync-workflow-duplicate-prevention-architecture.md) | **Duplicate Prevention Architecture** | :material-minus: Medium |
-| [042](042-upstream-filter-transform.md) | **Upstream Filter Transform** | :material-star: Critical |
+| [042](042-upstream-filter-transform.md) | **Opt-In Upstream Tree Transform** | :material-star: Critical |
 
 ### :material-label-outline: State Management & Tracking
 
@@ -76,7 +76,7 @@ Build architecture, dependency management, and documentation:
 | [026](026-dependabot-security-update-strategy.md) | **Dependabot Security Updates** | :material-minus: Medium |
 | [027](027-documentation-generation-strategy.md) | **Documentation Generation** | :material-minus: Medium |
 | [039](039-fork-owned-service-descriptor.md) | **Fork-Owned Service Descriptor** | :material-trending-up: High |
-| [040](040-canonical-build-files-not-directory.md) | **Sync Canonical Build Files Without Owning the Directory** | :material-trending-up: High |
+| [040](040-canonical-build-files-not-directory.md) | **Sync Canonical Build Files Individually** | :material-trending-up: High |
 | [043](043-descriptor-owned-acceptance-contract.md) | **Descriptor-Owned Acceptance Contract** | :material-trending-up: High |
 
 ### :material-rocket-launch: CI/CD & Deployment
@@ -87,13 +87,13 @@ Decisions for the container-image build, cluster deploy, and integration-test pi
 
 | ADR | Decision | Impact |
 |-----|----------|--------|
-| [032](032-cicd-deploy-loop-via-suspended-flux.md) | **CI/CD Deploy Loop via Suspended Flux** | :material-trending-up: High |
+| [032](032-cicd-deploy-loop-via-suspended-flux.md) | **Direct Candidate Deployment with Suspended Flux** | :material-trending-up: High |
 | [033](033-ghcr-as-service-image-registry.md) | **GHCR as Service Image Registry** | :material-minus: Medium |
-| [034](034-federated-identity-actions-to-azure.md) | **Federated Identity for Actions to Azure** | :material-trending-up: High |
-| [035](035-azure-only-maven-profile.md) | **Azure-Only Maven Profile Restriction** | :material-minus: Medium |
-| [036](036-workflow-trust-boundaries.md) | **Workflow Trust Boundaries for CI/CD** | :material-trending-up: High |
-| [037](037-engineering-system-owns-service-dockerfile.md) | **Engineering System Owns the Canonical Service Dockerfile** | :material-trending-up: High |
-| [038](038-defer-extra-file-dockerfile-support.md) | **Defer Extra-File Dockerfile Support for Core Service Onboarding** | :material-minus: Medium |
+| [034](034-federated-identity-actions-to-azure.md) | **Federated Identity from GitHub Actions to Azure** | :material-trending-up: High |
+| [035](035-azure-only-maven-profile.md) | **Azure-Only Maven Profiles** | :material-minus: Medium |
+| [036](036-workflow-trust-boundaries.md) | **Credentialed Workflow Trust Boundaries** | :material-trending-up: High |
+| [037](037-engineering-system-owns-service-dockerfile.md) | **Engineering-System-Owned Service Images** | :material-trending-up: High |
+| [038](038-defer-extra-file-dockerfile-support.md) | **Defer Generic Java Image Extra Files** | :material-minus: Medium |
 | [041](041-transactional-candidate-validation.md) | **Transactional Candidate Validation** | :material-trending-up: High |
 
 ### :material-package-variant: Release Management

@@ -1,40 +1,22 @@
-# ADR-035: Azure-Only Maven Profile Restriction
+# ADR-035: Azure-Only Maven Profiles
 
 ## Context
 
-- Forked OSDU services carry multiple cloud-provider Maven profiles (Azure, AWS, IBM, GC), built via the standard Java/Maven architecture ([ADR-025](025-java-maven-build-architecture.md)). Only Azure is relevant to SPI work — the profile is the CSP selector, and SPI is permanently Azure-only.
-- Building and unit-testing the non-Azure profiles in every SPI CI run is wasted CPU and irrelevant signal.
-- Surveying all ten service forks shows a near-uniform layout: no default `<modules>`, a `core` profile marked **`activeByDefault`** (the `*-core` / `*-core-plus` modules), and one profile per provider (`azure` → `provider/<svc>-azure`). Maven deactivates an `activeByDefault` profile the moment any explicit `-P` is passed, so `-P azure` alone silently drops `core`, and the Azure module then fails to resolve `<svc>-core:<revision>-SNAPSHOT`. The Azure build therefore requires `-P core,azure`, not a bare provider profile.
-- Two forks deviate: `entitlements` builds at `provider/entitlements-v2-azure`, and `indexer-queue` has no provider profiles at all (providers live in the default `<modules>`, with two Azure deployables). A per-fork override is needed for these.
+OSDU Java reactors contain shared modules and provider-specific modules. Activating an Azure profile disables Maven profiles marked `activeByDefault`, so `-P azure` can omit the shared core modules that the Azure module requires.
 
 ## Decision
 
-- CI builds the Azure profile set with a hardcoded engineering-system default of **`core,azure`** — correct for nine of the ten forks and not requiring any per-fork configuration.
-- A service records exceptional build profiles in
-  `build.mavenProfiles` in `.spi/service.yaml`; when absent CI uses
-  `core,azure`. Acceptance-test Maven arguments are declared separately under
-  `tests.acceptance`.
-- The build always passes a non-empty `-P` value; it never emits a bare `-P`. (Earlier this ADR specified "unset = no profile filter"; that is superseded — for these profile-gated poms an unfiltered build produces no provider JAR, so a real default is both simpler and more correct.)
+The Java lane uses `core,azure` when the descriptor does not declare `build.mavenProfiles`. The descriptor carries any service-specific profile list as reviewed source data. The action validates the comma-separated profile value before passing it to Maven and never emits an empty `-P`.
+
+Filtered `fork_upstream` validation uses `core` because that branch intentionally omits the fork-owned Azure modules. Acceptance-test Maven arguments remain a separate `tests.acceptance.mavenArguments` contract.
+
+- **Rejected alternative: build every provider profile in normal SPI CI.** It gives cross-provider regression signal, but it spends build time on implementations that SPI does not ship.
+- **Rejected alternative: activate only `azure`.** It is shorter, but Maven deactivates the default core profile and can leave required reactor modules unresolved.
+- **Rejected alternative: keep the override only in a repository variable.** It permits administrative changes without a commit, but it is not branch-versioned or reviewed with the service.
 
 ## Consequences
 
-- **Positive**
-  - Faster, cheaper CI (~3–5× fewer modules built) for Azure SPI service repositories.
-  - Unit-test results are 100% Azure-relevant.
-  - Zero per-fork configuration for the common case: nine of ten forks build correctly on the `core,azure` default with no variable set.
-  - The descriptor override handles deviant forks without an unversioned repository variable.
-- **Negative**
-  - Lost signal on whether upstream changes break other providers (AWS/IBM/GC) — acceptable since SPI does not ship those.
-  - The `core,azure` default assumes the common pom layout; a fork that
-    deviates must declare `build.mavenProfiles`, which is validated on every
-    descriptor change.
-- **Neutral**
-  - Cross-provider validation, when needed, is handled outside this default CI path.
-
-## Alternatives Considered
-
-- **Continue building all provider profiles in every CI run** — rejected: higher runtime/cost and low relevance to Azure-focused delivery.
-
----
-
-[← ADR-033](033-ghcr-as-service-image-registry.md) | :material-arrow-up: [Catalog](index.md)
+- Java CI builds shared core and Azure modules by default.
+- Services with different reactor layouts can declare an explicit profile set.
+- Provider regressions outside Azure are not part of the normal SPI signal.
+- Filtered upstream validation remains valid without pretending that fork-owned Azure source exists on `fork_upstream`.

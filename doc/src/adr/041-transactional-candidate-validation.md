@@ -1,69 +1,25 @@
 # ADR-041: Transactional Candidate Validation
 
-## Status
-
-Accepted.
-
 ## Context
 
-Candidate deployment and live integration testing originally ran as separate
-GitHub Actions jobs. Both jobs used the same concurrency group, but a job releases
-that group when it finishes. A newer run could therefore deploy between the
-older run's rollout and its integration tests.
-
-The deploy action captured only the previous digest. The workflow did not consume
-that output, and the manual restore workflow inferred the image repository from
-the current GitHub repository. A failed or successful validation run could leave
-its candidate running in the shared environment.
+Separate deployment and acceptance jobs release their concurrency lock between phases. A newer run can then replace the candidate before the older run tests it, and either run can leave its image in the shared Stack.
 
 ## Decision
 
-Run candidate deploy, integration tests, and restore in one credentialed job
-holding the existing per-service concurrency group for the complete transaction.
+One credentialed job holds a per-service concurrency group with cancellation disabled while it deploys, tests, and restores. Different services keep independent groups.
 
-Before mutation, the deploy action requires and captures the complete immutable
-image reference already configured on the Deployment:
+Before mutation, the deploy action captures the complete immutable image reference from the target container. The job deploys the candidate digest, verifies the running pod digest, runs the descriptor-selected Java or Python acceptance suite, and always attempts to restore the captured repository and digest.
 
-```text
-<repository>@sha256:<digest>
-```
+Each phase records its outcome before one final verdict. The stable `🚀 Deploy to spi-stack` and `🧪 Integration Tests` summary jobs fail when an expected publication, deployment, test, or restore result is missing. The operator restore workflow accepts the same complete immutable image reference for break-glass recovery.
 
-After tests, the transaction always attempts to restore that exact image. The PR
-lane is responsible for undoing only its own mutation; converging the environment
-to the Stack image lock remains a separate operator baseline-refresh concern.
-
-The transaction records deploy, test, and restore outcomes before applying its
-final failure result. Two unprivileged summary jobs retain the existing required
-check names:
-
-- `🚀 Deploy to spi-stack`
-- `🧪 Integration Tests`
-
-Those jobs run with `always()` and fail closed when an onboarded, trusted lane was
-expected but image publication or the transaction did not complete.
-
-No fleet-wide lock is introduced. Different services may continue to validate in
-parallel. A future lock requires evidence that cross-service concurrency causes
-real contamination.
+- **Rejected alternative: keep deploy and test as separate jobs with the same concurrency group.** It preserves a simpler graph, but the group is released between jobs and cannot protect the candidate under test.
+- **Rejected alternative: record only the previous digest.** It is shorter, but restoration can target the wrong registry or repository.
+- **Rejected alternative: serialize the entire Stack with one fleet lock.** It prevents cross-service interference, but it removes safe parallel validation without evidence that all services conflict.
 
 ## Consequences
 
-- A newer run for the same service cannot replace the candidate between deploy
-  and tests.
-- Successful and failed tests return the service to its exact pre-run image.
-- Restore works across GHCR, community registry, and future registries because
-  the complete image reference is preserved.
-- Restore failure blocks both required checks because the shared environment is
-  not known to be clean.
-- Manual cancellation or runner loss can still prevent cleanup. The break-glass
-  restore workflow accepts the complete previous image from the transaction
-  summary.
-- The workflow performs a second Azure login during restore because it reuses the
-  existing `aks-deploy` action. Removing that duplication is a later optimization,
-  not a correctness requirement.
-
-## Related Decisions
-
-- [ADR-032: CI/CD Deploy Loop via Suspended Flux](032-cicd-deploy-loop-via-suspended-flux.md)
-- [ADR-034: Federated Identity for Actions to Azure](034-federated-identity-actions-to-azure.md)
-- [ADR-036: Workflow Trust Boundaries for CI/CD](036-workflow-trust-boundaries.md)
+- A newer run for the same service waits until restoration completes.
+- Passed and failed tests attempt to return the Deployment to its exact pre-run image.
+- Restore failure fails both stable checks because the environment is not known to be clean.
+- Runner loss or forced cancellation can still prevent cleanup and requires operator recovery.
+- The action logs in to Azure again for restore because deploy and restore use the same composite action.
