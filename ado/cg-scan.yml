@@ -4,7 +4,7 @@
 parameters:
   - name: templateVersion
     type: string
-    default: cgproto-template-1
+    default: cgproto-template-2
 
 jobs:
   - job: cg_scan
