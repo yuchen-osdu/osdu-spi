@@ -4,7 +4,7 @@
 parameters:
   - name: templateVersion
     type: string
-    default: cgproto-template-3
+    default: cgproto-template-4
   - name: scanType
     type: string
     default: LogOnly
@@ -124,25 +124,43 @@ jobs:
 
       - bash: |
           set -euo pipefail
+          cp "$BUILD_ARTIFACTSTAGINGDIRECTORY"/GovCompDisc_Manifest_*.json "$OUT"/ 2>/dev/null || true
           python3 - <<'PY'
           import glob, json, os
           out = os.environ["OUT"]
-          stage = os.environ["BUILD_ARTIFACTSTAGINGDIRECTORY"]
-          files = sorted(glob.glob(os.path.join(stage, "**", "GovCompDisc_Manifest_*.json"), recursive=True))
+          files = sorted(glob.glob(os.path.join(out, "GovCompDisc_Manifest_*.json")))
           print("CD manifests:", files)
+          def entries(doc):
+              if isinstance(doc, list):
+                  return doc
+              for key in ("componentsFound", "ComponentsFound", "components", "Components"):
+                  if isinstance(doc, dict) and key in doc:
+                      return doc[key]
+              return []
+          def g(d, *keys):
+              for k in keys:
+                  if isinstance(d, dict) and k in d:
+                      return d[k]
+              return None
           comps = []
           for f in files:
-              comps += json.load(open(f)).get("componentsFound", [])
-          by_type = {}
-          maven, gits = set(), set()
+              doc = json.load(open(f))
+              e = entries(doc)
+              if e:
+                  print("sample entry keys:", list(e[0].keys()) if isinstance(e[0], dict) else type(e[0]))
+                  print("sample entry:", json.dumps(e[0])[:600])
+              comps += e
+          by_type, maven, gits = {}, set(), set()
           for c in comps:
-              comp = c.get("component", {})
-              t = comp.get("type", "?")
+              comp = g(c, "component", "Component") or c
+              t = str(g(comp, "type", "Type") or "?")
               by_type[t] = by_type.get(t, 0) + 1
+              inner = g(comp, "maven", "Maven") or comp
               if t.lower() == "maven":
-                  maven.add(f'{comp.get("groupId")}:{comp.get("artifactId")}:{comp.get("version")}')
+                  maven.add(f'{g(inner, "groupId", "GroupId")}:{g(inner, "artifactId", "ArtifactId")}:{g(inner, "version", "Version")}')
               if t.lower() == "git":
-                  gits.add(f'{comp.get("repositoryUrl")}@{comp.get("commitHash")}')
+                  gi = g(comp, "git", "Git") or comp
+                  gits.add(f'{g(gi, "repositoryUrl", "RepositoryUrl")}@{g(gi, "commitHash", "CommitHash")}')
           inv = {l.strip() for l in open(os.path.join(out, "inventory.txt")) if l.strip()}
           missing = sorted(inv - maven)
           print("components by type:", by_type)
@@ -155,7 +173,6 @@ jobs:
           json.dump({"byType": by_type, "git": sorted(gits), "inventory": len(inv), "maven": len(maven), "missing": missing, "jts": jts},
                     open(os.path.join(out, "verify.json"), "w"), indent=2)
           PY
-          cp "$BUILD_ARTIFACTSTAGINGDIRECTORY"/GovCompDisc_Manifest_*.json "$OUT"/ 2>/dev/null || true
         displayName: Verify detection against runtime inventory
         condition: succeededOrFailed()
 
