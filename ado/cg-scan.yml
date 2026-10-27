@@ -1,0 +1,27 @@
+# Prototype for ADO Feature 84645, phase 0b: the template that a service repository's thin
+# .github/ado/cg-scan.yml extends. Lives only on branch proto/cg-scan; consumed by tag.
+
+parameters:
+  - name: templateVersion
+    type: string
+    default: cgproto-template-1
+
+jobs:
+  - job: cg_scan
+    displayName: CG scan (prototype)
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+      - checkout: self
+        persistCredentials: false
+        fetchDepth: 0
+
+      - bash: |
+          set -euo pipefail
+          echo "template:      osdu-spi ado/cg-scan.yml ${{ parameters.templateVersion }}"
+          echo "repository:    $(Build.Repository.Name) ($(Build.Repository.Provider))"
+          echo "reason:        $(Build.Reason)"
+          echo "source branch: $(Build.SourceBranch)"
+          echo "source commit: $(Build.SourceVersion)"
+          git log -1 --format='HEAD %H %s'
+        displayName: Hello from template
