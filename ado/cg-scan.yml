@@ -4,7 +4,7 @@
 parameters:
   - name: templateVersion
     type: string
-    default: cgproto-template-6
+    default: cgproto-template-7
   - name: scanType
     type: string
     default: LogOnly
@@ -24,6 +24,13 @@ parameters:
   - name: images
     type: string
     default: ''
+  # Phase 0d: when set, branch runs refresh NOTICE from CG and open or update a PR into this base branch.
+  - name: noticePrBase
+    type: string
+    default: ''
+  - name: noticePrBranch
+    type: string
+    default: proto/notice-refresh
 
 jobs:
   - job: cg_scan
@@ -37,7 +44,8 @@ jobs:
       OUT: $(Build.ArtifactStagingDirectory)/cg-scan
     steps:
       - checkout: self
-        persistCredentials: false
+        # The NOTICE PR step pushes with the Azure Pipelines App token from the service connection.
+        persistCredentials: ${{ ne(parameters.noticePrBase, '') }}
         fetchDepth: 0
 
       - bash: |
@@ -175,6 +183,124 @@ jobs:
           PY
         displayName: Verify detection against runtime inventory
         condition: succeededOrFailed()
+
+      - ${{ if ne(parameters.noticePrBase, '') }}:
+        - bash: |
+            set -euo pipefail
+            python3 - <<'PY'
+            import base64, json, os, subprocess, time, urllib.error, urllib.request
+            env = os.environ
+
+            def call(url, method="GET", body=None, basic=None, bearer=None):
+                data = json.dumps(body).encode() if body is not None else None
+                req = urllib.request.Request(url, method=method, data=data)
+                req.add_header("Accept", "application/json")
+                if basic:
+                    req.add_header("Authorization", "Basic " + base64.b64encode((":" + basic).encode()).decode())
+                if bearer:
+                    req.add_header("Authorization", "Bearer " + bearer)
+                    req.add_header("X-GitHub-Api-Version", "2022-11-28")
+                if data:
+                    req.add_header("Content-Type", "application/json")
+                try:
+                    with urllib.request.urlopen(req, timeout=300) as r:
+                        raw = r.read()
+                        return json.loads(raw) if raw else None
+                except urllib.error.HTTPError as e:
+                    raise SystemExit(f"##[error]{method} {url.split('?')[0]} -> HTTP {e.code}: {e.read()[:500]!r}")
+
+            def git(*args):
+                return subprocess.run(["git", *args], check=True, capture_output=True, text=True).stdout.strip()
+
+            ado = env["SYSTEM_ACCESSTOKEN"]
+            proj, repo = env["SYSTEM_TEAMPROJECTID"], env["BUILD_REPOSITORY_NAME"]
+            branch = env["BUILD_SOURCEBRANCH"].removeprefix("refs/heads/")
+            gov = call(f'{env["SYSTEM_COLLECTIONURI"]}_apis/resourceareas/7136235f-d277-4c27-9194-e3ada05fea2c?api-version=7.1-preview.1',
+                       basic=ado)["locationUrl"]
+            api = f"{gov}{proj}/_apis/componentgovernance/governedrepositories"
+
+            repos = call(f"{api}?api-version=5.0-preview.1", basic=ado)["value"]
+            gr = [r for r in repos if (r.get("name") or "").lower() == repo.lower()]
+            if len(gr) != 1:
+                raise SystemExit(f"##[error]expected one governed repository named {repo}, found {len(gr)}")
+            gid = gr[0]["id"]
+
+            phase = env.get("SYSTEM_PHASEID", "")
+            print("phase variables:", {k: v for k, v in env.items() if "PHASE" in k})
+            prefix = f'vsts://{env["SYSTEM_COLLECTIONID"]}/{proj}/{env["SYSTEM_DEFINITIONID"]}/'.lower()
+            want_source = f"github://{repo}/{branch}".lower()
+            types = call(f"{api}/{gid}/snapshottypes?api-version=5.0-preview.1", basic=ado)["value"]
+            same = [t for t in types if t["buildType"].lower().startswith(prefix) and t["sourceType"].lower() == want_source]
+            match = [t for t in same if t["buildType"].lower() == prefix + phase.lower()] if phase else same
+            if len(match) != 1:
+                for t in types:
+                    print("candidate", t["typeId"], t["buildType"], t["sourceType"])
+                raise SystemExit(f"##[error]no unique snapshot type for {prefix}{phase} {want_source}")
+            type_id = match[0]["typeId"]
+            print(f"governed repository {gid}, snapshot type {type_id}")
+
+            for attempt in range(1, 4):
+                try:
+                    res = call(f"{api}/{gid}/Notice?snapshotTypeId={type_id}&format=text", basic=ado)
+                    break
+                except SystemExit as e:
+                    if attempt == 3:
+                        raise
+                    print(f"Notice attempt {attempt} failed ({e}); retrying in 30 s")
+                    time.sleep(30)
+            content = res["content"]
+            out = env["OUT"]
+            open(os.path.join(out, "NOTICE.cg"), "w").write(content)
+            json.dump(res.get("excludedComponents"), open(os.path.join(out, "notice-excluded.json"), "w"), indent=2)
+            entries = content.count("\n---------------------------------------------------------\n")
+            print(f"CG NOTICE: {len(content)} chars, about {entries} entries")
+
+            current = open("NOTICE").read() if os.path.exists("NOTICE") else None
+            if current == content:
+                print("NOTICE unchanged; no PR.")
+                raise SystemExit(0)
+
+            # The checkout persisted the service connection's GitHub App token as an extraheader.
+            hdr = [l for l in git("config", "--get-regexp", r"^http\..*\.extraheader$").splitlines() if "AUTHORIZATION" in l.upper()]
+            if not hdr:
+                raise SystemExit("##[error]no persisted GitHub credential in git config")
+            cred = base64.b64decode(hdr[0].split()[-1]).decode()
+            gh = cred.split(":", 1)[1]
+            print(f"##vso[task.setsecret]{gh}")
+            print(f"persisted credential user: {cred.split(':', 1)[0]}")
+
+            head, base = env["NOTICE_PR_BRANCH"], env["NOTICE_PR_BASE"]
+            open("NOTICE", "w").write(content)
+            git("config", "user.name", "osdu-spi CG pipeline (prototype)")
+            git("config", "user.email", "osdu-spi-cg-prototype@users.noreply.github.com")
+            git("checkout", "-B", head)
+            git("add", "NOTICE")
+            run_url = f'{env["SYSTEM_COLLECTIONURI"]}{env["SYSTEM_TEAMPROJECT"]}/_build/results?buildId={env["BUILD_BUILDID"]}'
+            git("commit", "-m", "chore(notice): refresh NOTICE from Component Governance",
+                "-m", f"Generated from CG snapshot type {type_id} by {run_url}")
+            git("push", "--force", "origin", f"HEAD:refs/heads/{head}")
+            print(f"pushed {head} {git('rev-parse', 'HEAD')}")
+
+            owner = repo.split("/")[0]
+            gh_api = f"https://api.github.com/repos/{repo}/pulls"
+            body = (f"Prototype for ADO Feature 84645 (phase 0d).\n\nNOTICE generated by Component Governance for `{repo}` "
+                    f"`{branch}`, snapshot type {type_id}.\n\nADO run: {run_url}\n\nDo not merge.")
+            existing = call(f"{gh_api}?head={owner}:{head}&base={base}&state=open", bearer=gh)
+            if existing:
+                pr = call(existing[0]["url"], method="PATCH", body={"body": body}, bearer=gh)
+                print(f"updated PR #{pr['number']} {pr['html_url']} (user {pr['user']['login']})")
+            else:
+                pr = call(gh_api, method="POST", bearer=gh, body={
+                    "title": "chore(notice): refresh NOTICE from Component Governance (prototype)",
+                    "head": head, "base": base, "body": body, "draft": True})
+                print(f"opened PR #{pr['number']} {pr['html_url']} (user {pr['user']['login']})")
+            PY
+          displayName: Refresh NOTICE from CG and open PR
+          condition: and(succeeded(), startsWith(variables['Build.SourceBranch'], 'refs/heads/'), eq('${{ parameters.scanType }}', 'Register'))
+          env:
+            SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+            NOTICE_PR_BASE: ${{ parameters.noticePrBase }}
+            NOTICE_PR_BRANCH: ${{ parameters.noticePrBranch }}
 
       - publish: $(OUT)
         artifact: cg-scan-$(System.JobAttempt)
