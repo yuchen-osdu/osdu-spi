@@ -4,7 +4,7 @@
 parameters:
   - name: templateVersion
     type: string
-    default: cgproto-template-5
+    default: cgproto-template-6
   - name: scanType
     type: string
     default: LogOnly
@@ -107,7 +107,7 @@ jobs:
           set -euo pipefail
           IFS=',' read -ra imgs <<< '${{ parameters.images }}'
           for i in "${imgs[@]}"; do [ -n "$i" ] && docker pull -q "$i"; done
-          docker images --digests | head -5
+          docker images --digests --format '{{.Repository}}@{{.Digest}} {{.Size}}' | grep -F ghcr.io || true
         displayName: Pull published images
         condition: ne('${{ parameters.images }}', '')
 
