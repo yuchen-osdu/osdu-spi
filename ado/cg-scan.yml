@@ -4,7 +4,7 @@
 parameters:
   - name: templateVersion
     type: string
-    default: cgproto-template-4
+    default: cgproto-template-5
   - name: scanType
     type: string
     default: LogOnly
@@ -120,7 +120,7 @@ jobs:
           dockerImagesToScan: ${{ parameters.images }}
           alertWarningLevel: High
         env:
-          MAVEN_ARGS: --settings=$(SETTINGS_FILE) -P ${{ parameters.mavenProfiles }}
+          MAVEN_ARGS: --settings=$(SETTINGS_FILE) -P ${{ parameters.mavenProfiles }} -pl ${{ parameters.shippedModules }} -am
 
       - bash: |
           set -euo pipefail
